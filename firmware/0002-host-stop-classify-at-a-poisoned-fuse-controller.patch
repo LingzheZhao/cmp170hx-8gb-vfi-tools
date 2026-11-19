@@ -1,0 +1,66 @@
+From 8a6aaf9b494f0a2279508be8cef953685d47b6b0 Mon Sep 17 00:00:00 2001
+From: darkmaniac7 <31073889+darkmaniac7@users.noreply.github.com>
+Date: Thu, 19 Nov 2026 07:29:22 -0600
+Subject: [PATCH 2/3] host: stop classify at a poisoned fuse controller
+
+A shot that disturbs the fuse read can leave the fuse controller poisoned:
+FUSECTRL (0x820000) reads 0xBADFxxxx and the controller stops answering
+normally. classify() then went on to read DSOV, the FPF row, the privilege
+mask, the CRC status and the shadow registers from that card, and wrote
+DSOV_SET. Further BAR0 reads on such a card are a host-hang risk.
+
+Read FUSECTRL first. If its top half is 0xBADF, read nothing else and return
+a verdict with DSOV, the write-back, the privilege mask and the CRC status at
+0 and the FPF row marked unreadable, plus the FUSECTRL value in the shadow
+dict. campaign then counts the shot as over. The next PEX_RST clears the
+state.
+
+campaign used PMC_BOOT_0 (0x0) as its liveness read after restore(). Use
+FUSECTRL instead, so a poisoned card is never read past that one register.
+
+Note for anyone counting outcomes: a poisoned shot reports dsov=0, crc=0 and
+priv=0 because nothing was read. Count a real DSOV flip only when the
+privilege mask is nonzero.
+---
+ host/ga100vfi/classify.py | 13 ++++++++++++-
+ host/ga100vfi/cli.py      |  2 +-
+ 2 files changed, 13 insertions(+), 2 deletions(-)
+
+diff --git a/host/ga100vfi/classify.py b/host/ga100vfi/classify.py
+index 0671ab6..84ef87d 100644
+--- a/host/ga100vfi/classify.py
++++ b/host/ga100vfi/classify.py
+@@ -77,8 +77,19 @@ def snapshot(bar) -> dict[str, int]:
+     return {name: bar.rd32(off) for name, off in SHADOW.items()}
+ 
+ 
++FUSECTRL = 0x00820000
++POISON_TAG = 0xBADF0000
++
++
+ def classify(bar, baseline: dict[str, int] | None = None) -> Verdict:
+-    """Run checks 3-8. Leaves DSOV set to 1 if check 5 succeeds."""
++    """Run checks 3-8. Leaves DSOV set to 1 if check 5 succeeds.
++
++    Read FUSECTRL first. A disturbed fuse read can leave the controller at 0xBADFxxxx; more BAR0 reads
++    on such a card are a host-hang risk.
++    Poisoned -> read nothing else, report an over-glitched shot (priv_mask 0 marks it); the next PEX_RST clears it."""
++    ctrl = bar.rd32(FUSECTRL)
++    if (ctrl & 0xFFFF0000) == POISON_TAG:
++        return Verdict(0, UNREADABLE, 0, 0, 0, {"FUSECTRL_POISONED": ctrl}, {})
+     dsov = bar.rd32(DSOV)
+     fpf = bar.rd32(FPF_ROW)
+     bar.wr32(DSOV_SET, 1)
+diff --git a/host/ga100vfi/cli.py b/host/ga100vfi/cli.py
+index 7155845..03c3ecb 100644
+--- a/host/ga100vfi/cli.py
++++ b/host/ga100vfi/cli.py
+@@ -116,7 +116,7 @@ def cmd_campaign(args) -> int:
+                 outcome = "lost"
+                 if restore(args.bdf, wait_s=args.restore_wait):
+                     with Bar0(args.bdf) as bar:
+-                        if bar.rd32(0x00) != 0xFFFFFFFF:
++                        if bar.rd32(0x00820000) != 0xFFFFFFFF:  # FUSECTRL, not PMC_BOOT_0 (poison-safe)
+                             v = classify(bar)
+                             outcome = _classify_attempt(v)
+                 if outcome == "lost":

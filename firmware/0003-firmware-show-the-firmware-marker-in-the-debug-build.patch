@@ -1,0 +1,26 @@
+From 7afb1c98933dc57ec407727370d7a1161c203e77 Mon Sep 17 00:00:00 2001
+From: darkmaniac7 <31073889+darkmaniac7@users.noreply.github.com>
+Date: Thu, 19 Nov 2026 07:29:22 -0600
+Subject: [PATCH 3/3] firmware: show the firmware marker in the debug build
+ status line
+
+The normal build's v line ends in fw=lab-psr1 since the profile restore
+change. Add the same marker to the debug build's v line (fw=lab-psr1-debug),
+so host tools can check a debug board the same way.
+---
+ firmware/pwmvid.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/firmware/pwmvid.c b/firmware/pwmvid.c
+index b675571..c236bc9 100644
+--- a/firmware/pwmvid.c
++++ b/firmware/pwmvid.c
+@@ -682,7 +682,7 @@ int main(void) {
+         else if (c == 'v') {
+ #ifdef DEBUG
+             nvvdd_refresh();
+-            printf("clk=%u MHz  nvvdd=%.4f V  sample_ns=%.1f  last reset: %s\n",
++            printf("clk=%u MHz  nvvdd=%.4f V  sample_ns=%.1f  last reset: %s  fw=lab-psr1-debug\n",
+                    clock_get_hz(clk_sys) / 1000000,
+                    nvvdd_v, sample_ns, reset_note);
+ #else

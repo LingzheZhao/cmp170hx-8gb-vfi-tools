@@ -1,4 +1,4 @@
-"""Fake serial client: answers like lab-psr1-push1 firmware, records every command."""
+"""Fake serial client: answers like lab-psr1-push2 firmware, records every command and open handle."""
 from __future__ import annotations
 
 import os
@@ -38,11 +38,19 @@ class Report:
     raw: str
 
 
+class NoPwdReport:   # a parse that left pwd off
+    e1 = 0xC2FA
+    writes_failed = 0
+    raw = "glitch done e1=0xc2fa writes_failed=0\r\nrelease_at=0 scheduled=0 via=alarm"
+
+
 class Card:
     def __init__(self, port="/dev/ttyACM0", baud=115200):
+        b.open_cards[0] += 1
         b.log("OPEN %s" % port)
 
     def close(self):
+        b.open_cards[0] -= 1
         b.log("CLOSE")
 
     def cmd(self, line, wait=0.3, total=3.0, until=None):
@@ -51,7 +59,7 @@ class Card:
             return os.environ.get("FAKE_UNLOCK", "unlock already MATCH (CML 0x08)\r\nunlock MATCH wp=00 cfg=1229")
         if line == "v":
             return os.environ.get("FAKE_V", "clk=400 MHz  nvvdd=0.0000 V  sample_ns=240.0  "
-                                  "last reset: power-on / external reset  fw=lab-psr1-push1-debug")
+                                  "last reset: power-on / external reset  fw=lab-psr1-push2-debug")
         raise AssertionError("unexpected serial command %r" % line)
 
     def status(self):
@@ -71,17 +79,28 @@ class Card:
     def attempt(self, a):
         code = b.next_shot()
         b.log("SHOT %s %s" % (code, a.command()))
+        if code == "n":
+            raise IOError("glitch vd=%d (reply cut off)" % a.v_dip_mv)
+        if code == "A":
+            raise IOError("glitch ABORT: PMBus write act=1 scheduled at -51 us runs from -40 us across the PEX_RST release at 0 (one write ~47 us)")
+        if code == "D":
+            return NoPwdReport()
         pw, gap = max(a.pw, 36), max(a.gap, 36)
         raw = (f"glitch vd={a.v_dip_mv} td={a.t_dip_us} vr={a.v_restore_mv} tr={a.t_restore_us} tv={a.t_revert_us} "
                f"fast={a.fast} hold={a.hold_ms} pw={pw} gap={gap} delay={a.delay} revert={a.revert} "
-               f"reset_at=-1000 dither=0 hold_at=none\r\n"
-               "timing i=0 scheduled=-1300 act=8 arg=32 start=-1300 end=-1253 ok=1\r\n"
-               "release_at=0 scheduled=0 via=alarm\r\n")
+               f"reset_at=-1000 dither=0 hold_at=none\r\n")
+        if code == "W":
+            raw += "glitch WARN: PMBus write act=1 at -17 us overlaps the PEX_RST release at 0 (one write ~47 us)\r\n"
+        raw += "timing i=0 scheduled=-1300 act=8 arg=32 start=-1300 end=-1253 ok=1\r\nprime_at=0\r\n"
+        rel = b.RELEASE.get(code, "release_at=0 scheduled=0 via=alarm")
+        if rel:
+            raw += rel + "\r\n"
         if code == "c":
             raw += "rail_code=41 status 7a=10 7b=00 7c=00 7d=00 7f=00 80=ERR 78=42\r\n"
         e1 = int(os.environ.get("FAKE_E1", "0xc2fa"), 16)
-        raw += "glitch done pwd=1 e1=0x%04x nvvdd=0.7000 writes_failed=0" % e1
-        return Report(True, e1, 0.7, 0, raw)
+        wf = 1 if code == "E" else 0
+        raw += "glitch done pwd=1 e1=0x%04x nvvdd=0.7000 writes_failed=%d" % (e1, wf)
+        return Report(True, e1, 0.7, wf, raw)
 
     def trace(self):
         return []

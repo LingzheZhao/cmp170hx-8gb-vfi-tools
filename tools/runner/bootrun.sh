@@ -5,16 +5,18 @@
 #
 # power cycle (Wake-on-LAN or IPMI) -> fresh-boot guard -> plan checksum (when the card names plan files) -> copy the
 # runner to the bench -> host guard -> I2C preflight -> card identity -> temperature gate -> bisect_shots.py (stops at
-# the first shot that is not "under") -> on ">>> GOLDILOCKS HELD": run ON_HOLD if set, else stop and report the held
-# state. Nothing here burns fuses.
+# the first shot that is not "under") -> on a ">>> GOLDILOCKS HELD" line with runner status 0: run ON_HOLD if set,
+# else stop and report the held state. Nothing here burns fuses.
 #
 # env: NOCYCLE=1 (use the current boot), FLOOR (mV), TMIN (raw READ_TEMP1), TCAP (s), OFFWAIT (s), POWER (wol|ipmi),
-#      RUNTO (s, run time limit), RUNNER (runner file to copy; default bisect_shots.py here), and for the runner:
-#      TRACE, PARK_EACH, REPEAT, SHOTCAP, LOSTRUN, RESTORE_WAIT, CELLLOST, CLASSIFY_WRITE, SENTINEL
-# Exit codes: 0 a hold was seen, 1 bench never came up, 2 usage or config, 3 copy, host guard or preflight failed,
-# 4 plan checksum mismatch, 5 identity mismatch, 6 not a fresh boot, 7 bench did not power off; otherwise the
-# runner's own exit code (0 sequence done, 9 controller off, 10 tipped, 12 no dip; see bisect_shots.py), 124 when
-# RUNTO cut the run. The last line is always "RESULT: ..." or the hold report.
+#      RUNTO (s, run time limit), RUNNER (runner file to copy; default bisect_shots.py here), BOOTRUN_LOG (the run
+#      log; default $LOG_DIR/bootrun-<card>.last), and for the runner: TRACE, PARK_EACH, REPEAT, SHOTCAP, LOSTRUN,
+#      RESTORE_WAIT, CELLLOST, CLASSIFY_WRITE, SENTINEL, BAD0_FOLLOWUP (SENTINEL_EXPECT comes from the card function)
+# Exit codes: 1 bench never came up, 2 usage or config, 3 host guard or preflight failed, 4 plan checksum failed or
+# mismatched, 5 identity mismatch, 6 not a fresh boot, 7 bench did not power off, 8 runner transfer failed,
+# 16 temperature gate (TMIN not reached within TCAP: no shot); otherwise the runner's own exit code (0 sequence done
+# or goldilocks held, 9 controller off, 10 tipped, 13 partial held, 14 mistimed, ...; see bisect_shots.py), 124 when
+# RUNTO cut the run, or ON_HOLD's exit code after a hold. The last line is "RESULT: ..." or the hold report.
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd); TOOLS=$(dirname "$HERE")
 CONF=${BENCH_CONF:-$HERE/bench.conf}
@@ -25,7 +27,7 @@ CONF=${BENCH_CONF:-$HERE/bench.conf}
 : "${BENCH_SSH:?set BENCH_SSH in $CONF}" "${BENCH_DIR:?set BENCH_DIR in $CONF}" "${BENCH_PY:?set BENCH_PY in $CONF}"
 [ $# -eq 2 ] || { echo "usage: $0 <card> '<SEQ json>'"; exit 2; }
 CARD=$1; SEQ=$2
-TAG=""; GPC=""; SMC=""; CARD_BDF=""; PLAN_LOCAL=""; PLAN_REMOTE=""; PLAN_FILES=""
+TAG=""; GPC=""; SMC=""; CARD_BDF=""; PLAN_LOCAL=""; PLAN_REMOTE=""; PLAN_FILES=""; SENTINEL_EXPECT=""
 declare -F "card_$CARD" >/dev/null || { echo "unknown card '$CARD': define card_$CARD in $CONF"; exit 2; }
 "card_$CARD"
 [ -n "$TAG" ] && [ -n "$GPC" ] && [ -n "$SMC" ] || { echo "card_$CARD must set TAG, GPC and SMC"; exit 2; }
@@ -36,18 +38,24 @@ PORT=${PICO_PORT:-/dev/ttyACM0}; H=$BENCH_SSH
 if [ "${NOCYCLE:-0}" != 1 ]; then
   power_cycle || exit $?
 fi
-u=$(bench_uptime); echo "bench up ${u:-?}s"; [ "${u:-99999}" -lt "${FRESH_MAX:-900}" ] || { echo "NOT A FRESH BOOT: stop"; exit 6; }
+# The boot id goes into the log, so two runs can be told apart as two boots.
+u=$(bench_uptime); bid=$(ssh -o ConnectTimeout=3 -o BatchMode=yes "$H" cat /proc/sys/kernel/random/boot_id 2>/dev/null)
+echo "bench up ${u:-?}s boot_id ${bid:-?}"; [ "${u:-99999}" -lt "${FRESH_MAX:-900}" ] || { echo "NOT A FRESH BOOT: stop"; exit 6; }
 if [ -n "$PLAN_FILES" ]; then
+  # Hash lines include the file names; both sides must hash every plan file, and match line for line.
+  nf=$(echo "$PLAN_FILES" | wc -w)
   # shellcheck disable=SC2086
-  a=$(cd "$PLAN_LOCAL" && sha256sum $PLAN_FILES | cut -c1-64 | tr '\n' ' ')
-  b=$(ssh "$H" "cd $(printf %q "$PLAN_REMOTE") && sha256sum $PLAN_FILES | cut -c1-64 | tr '\n' ' '")
-  [ -n "$a" ] && [ "$a" = "$b" ] && echo "PLAN SHA MATCH ($CARD)" || { echo "PLAN SHA MISMATCH: stop"; exit 4; }
+  a=$(cd "$PLAN_LOCAL" && sha256sum $PLAN_FILES) || { echo "PLAN SHA FAILED (local hash): stop"; exit 4; }
+  b=$(ssh "$H" "cd $(printf %q "$PLAN_REMOTE") && sha256sum $PLAN_FILES") || { echo "PLAN SHA FAILED (bench hash): stop"; exit 4; }
+  [ "$(echo "$a" | grep -cE '^[0-9a-f]{64}  ')" = "$nf" ] && [ "$(echo "$b" | grep -cE '^[0-9a-f]{64}  ')" = "$nf" ] \
+    || { echo "PLAN SHA FAILED (need $nf hashes on each side): stop"; exit 4; }
+  [ "$a" = "$b" ] && echo "PLAN SHA MATCH ($CARD)" || { echo "PLAN SHA MISMATCH: stop"; exit 4; }
 fi
 ssh "$H" "mkdir -p $(printf %q "$BENCH_DIR")" && scp -q "$RUNNER" "$H:$BENCH_DIR/bisect_shots.py" \
   && scp -q "$HERE/park.py" "$HERE/preflight.py" "$TOOLS/vfi_snap.py" "$TOOLS/vfi_common.py" "$H:$BENCH_DIR/" \
-  || { echo "copy to the bench failed: stop"; exit 3; }
-mkdir -p "${LOG_DIR:-.}"; L=${LOG_DIR:-.}/bootrun-$CARD.last
-XENV="REPEAT=${REPEAT:-1} SHOTCAP=${SHOTCAP:-450} LOSTRUN=${LOSTRUN:-8} RESTORE_WAIT=${RESTORE_WAIT:-8.0} CELLLOST=${CELLLOST:-0} CLASSIFY_WRITE=${CLASSIFY_WRITE:-0} SENTINEL=${SENTINEL:-0x820410}"
+  || { echo "RUNNER TRANSFER FAILED: stop"; exit 8; }
+L=${BOOTRUN_LOG:-${LOG_DIR:-.}/bootrun-$CARD.last}; mkdir -p "$(dirname "$L")"
+XENV="REPEAT=${REPEAT:-1} SHOTCAP=${SHOTCAP:-450} LOSTRUN=${LOSTRUN:-8} RESTORE_WAIT=${RESTORE_WAIT:-8.0} CELLLOST=${CELLLOST:-0} CLASSIFY_WRITE=${CLASSIFY_WRITE:-0} SENTINEL=${SENTINEL:-0x820410} BAD0_FOLLOWUP=${BAD0_FOLLOWUP:-0} SENTINEL_EXPECT=$SENTINEL_EXPECT"
 ssh "$H" "bash -s -- $(printf '%q ' "$TAG" "$SEQ" "$GPC" "$SMC" "$FLOOR" "$TMIN" "$TCAP" "$TRACE" "$PARK_EACH" "$XENV" "${RUNTO:-900}" "$BENCH_DIR" "$BENCH_PY" "${BENCH_TASKSET:-}" "$PORT" "$CARD_BDF" "${GLITCH_CMDLINE:-}" "${MASK_PCIEHP:-0}")" <<'R' | tee "$L"
 TAG=$1; SEQ=$2; GPC=$3; SMC=$4; FLOOR=$5; TMIN=$6; TCAP=$7; TRACE=$8; PARK_EACH=$9; XENV=${10}; RUNTO=${11}
 D=${12}; PY=${13}; TS=${14}; PORT=${15}; BDF=${16}; CMDW=${17}; MASK=${18}
@@ -91,23 +99,27 @@ timeout 60 $PYV -E -s "$D/vfi_snap.py" --bdf "$BDF" --port "$PORT" --label prefl
 grep -E "verdict|GPC dis" /tmp/vfi-snap.out
 grep -q "GPC dis/def/st=$GPC/" /tmp/vfi-snap.out && grep -q "$SMC" /tmp/vfi-snap.out && echo "IDENTITY OK: $TAG" || { echo "IDENTITY MISMATCH: stop"; exit 5; }
 t0=$(date +%s); while [ $(( $(date +%s) - t0 )) -lt "$TCAP" ]; do v=$(temp); [ -n "$v" ] && [ "$v" -ge "$TMIN" ] && break; sleep 15; done
-echo "START temp_raw=$(temp) $(date +%H:%M:%S)"
+v=$(temp)
+if ! [ "$v" -ge "$TMIN" ] 2>/dev/null; then echo "TEMP GATE FAILED: temp_raw ${v:-unreadable} did not reach TMIN $TMIN within TCAP ${TCAP}s: no shot"; exit 16; fi
+echo "START temp_raw=$v $(date +%H:%M:%S)"
 echo "run env: $XENV timeout ${RUNTO}s"
 # shellcheck disable=SC2086
 env $XENV VFI_BDF="$BDF" VFI_PORT="$PORT" VFI_TRACE_DIR="$D" FLOOR="$FLOOR" TRACE="$TRACE" PARK_EACH="$PARK_EACH" timeout "$RUNTO" $PYV -I "$D/bisect_shots.py" "$TAG" "$SEQ"
 rc=$?
-echo "end temp_raw=$(temp)"
+echo "end temp_raw=$(temp) runner_rc=$rc"
 exit $rc
 R
 rc=${PIPESTATUS[0]}
-if grep -q ">>> GOLDILOCKS HELD" "$L"; then
+if grep -q "^>>> GOLDILOCKS HELD" "$L"; then
+  [ "$rc" = 0 ] || { echo "HOLD LINE BUT RUNNER RC $rc: no ON_HOLD, stop for review"; exit "$rc"; }
   echo "HOLD SEEN $(date +%H:%M:%S): $TAG is held in the goldilocks state (rail under PMBus control, not parked)"
   if [ -n "${ON_HOLD:-}" ]; then
-    CARD=$CARD TAG=$TAG BENCH_SSH=$BENCH_SSH BENCH_DIR=$BENCH_DIR RUN_LOG=$L bash -c "$ON_HOLD"; echo "ON_HOLD rc=$?"
-  else
-    echo "No ON_HOLD hook set: stopping here. Read the held state on the bench (vfi_snap.py in $BENCH_DIR), then park (park.py) or power-cycle."
+    CARD=$CARD TAG=$TAG BENCH_SSH=$BENCH_SSH BENCH_DIR=$BENCH_DIR RUN_LOG=$L bash -c "$ON_HOLD"; hrc=$?
+    echo "ON_HOLD rc=$hrc"; exit "$hrc"
   fi
+  echo "No ON_HOLD hook set: stopping here. Read the held state on the bench (vfi_snap.py in $BENCH_DIR), then park (park.py) or power-cycle."
   exit 0
 fi
-r=$(grep -E "TIPPED|sequence exhausted|CONTROLLER OFF|NO DIP|STOP|FAILED|MISMATCH|HOST GUARD" "$L" | head -1); echo "RESULT: ${r:-see log}"
+r=$(grep -E "TIPPED|MISTIMED at|PARTIAL HELD|sequence exhausted|CONTROLLER OFF|NO DIP|STOP|FAILED|MISMATCH|HOST GUARD" "$L" | head -1)
+echo "RESULT: ${r:-see log} (runner rc $rc)"
 exit "$rc"

@@ -29,7 +29,8 @@ MASK_PCIEHP=0                                # 1: mask pciehp interrupts on a ho
 FRESH_MAX=900                                # refuse to run when the bench has been up longer than this, seconds
 
 # On this machine
-LOG_DIR=.                                    # bootrun-<card>.last (the run log) goes here
+LOG_DIR=.                                    # bootrun-<card>.last (the run log) goes here; BOOTRUN_LOG=<file> in the
+                                             # environment names the log file itself (the planner does that)
 ON_HOLD=                                     # command run here when a goldilocks is held; empty = stop and report.
                                              # It gets CARD, TAG, BENCH_SSH, BENCH_DIR and RUN_LOG in its environment.
 
@@ -40,6 +41,8 @@ card_example() {
   GPC=0x00000000                             # GPC_DISABLE as vfi_snap.py prints it: "GPC dis/def/st=<GPC>/..."
   SMC="SM now=70 ceiling=0"                  # must appear in vfi_snap.py's output as printed
   CARD_BDF=                                  # optional; empty = the only 10de:20c2 card on the bench
+  SENTINEL_EXPECT=                           # optional: the card's healthy value of the 0x820410 fuse alias on a fresh
+                                             # boot (0x1 on one card here); the runner stops if a boot reads otherwise
   PLAN_LOCAL=                                # optional: a directory of reviewed files on this machine ...
   PLAN_REMOTE=                               # ... and the bench directory whose copies must match them by sha256
   PLAN_FILES=""                              # the file names, in both directories (empty = no checksum)

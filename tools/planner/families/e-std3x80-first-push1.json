@@ -1,0 +1,80 @@
+{
+  "name": "e-std3x80-first-push1",
+  "card": "e",
+  "description": "Same geometry as the push2 family, read on push1 first shots (release +9/+10 us, accepted by the push1 runner's 15 us gate). An analysis view of older data; new shots belong to the push2 family.",
+  "state_class": "first-shot-fresh-boot",
+  "base": {
+    "td": -60,
+    "pulses": 3,
+    "pw": 80,
+    "vr": 750,
+    "fast": 1,
+    "hold": 0,
+    "t_restore": -20,
+    "revert": 0
+  },
+  "primary": {
+    "knob": "code",
+    "start_mv": 450,
+    "coarse_step": 4,
+    "column_step": 1
+  },
+  "columns": [
+    {
+      "vr": 625
+    },
+    {
+      "vr": 700
+    },
+    {
+      "pw": 100
+    },
+    {
+      "pw": 60
+    },
+    {
+      "td": -50
+    },
+    {
+      "td": -70
+    },
+    {
+      "vr": 825
+    },
+    {
+      "revert": 2
+    }
+  ],
+  "repeats": 2,
+  "policy": {
+    "firmware": [
+      "lab-psr1-push1-debug",
+      "lab-psr1-push1"
+    ],
+    "release_window_us": [
+      -15,
+      15
+    ],
+    "overlap_is_mistimed": true,
+    "exclude_conditions": {
+      "nvvdd_probe": true
+    }
+  },
+  "densify": {
+    "td": 2,
+    "pw": 5,
+    "vr": 25
+  },
+  "lockin": {
+    "target": 0.9,
+    "confidence": 0.95
+  },
+  "batch": 4,
+  "equivalent_states": [
+    "post-park"
+  ],
+  "equivalence_note": "Post-park shots (PARK_EACH=1) count as first shots: on card E, 350 mV pw 80 twice with a park between was under/under, and without the park the second shot lost the link. Remove 'post-park' from equivalent_states to turn this off.",
+  "launcher": {
+    "mode": "firstshot"
+  }
+}

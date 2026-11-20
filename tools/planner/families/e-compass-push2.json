@@ -1,0 +1,110 @@
+{
+  "name": "e-compass-push2",
+  "card": "e",
+  "method": "compass",
+  "description": "CRC-compass search (a community member's method) on card E as first shots of fresh boots on push2 firmware: loss-island edge on the short 3 x 80 us train (td -60, vr 750), anchor one VID code to the shallow side, delay sweep 120..460, fine band edges, pw tuning (capped by the latch-energy rule), drift loop. push1 first shots only seed the loss-island probes.",
+  "state_class": "first-shot-fresh-boot",
+  "base": {
+    "td": -60,
+    "pulses": 3,
+    "pw": 80,
+    "vr": 750,
+    "fast": 1,
+    "hold": 0,
+    "t_restore": -20,
+    "revert": 0,
+    "delay": 117,
+    "gap": 150
+  },
+  "primary": {
+    "knob": "code",
+    "start_mv": 450,
+    "coarse_step": 4,
+    "column_step": 1
+  },
+  "repeats": 2,
+  "policy": {
+    "firmware": [
+      "lab-psr1-push2-debug",
+      "lab-psr1-push2"
+    ],
+    "release_window_us": [
+      0,
+      4
+    ],
+    "overlap_is_mistimed": true,
+    "exclude_conditions": {
+      "nvvdd_probe": true
+    }
+  },
+  "prior_policy": {
+    "firmware": [
+      "lab-psr1-push1-debug",
+      "lab-psr1-push1"
+    ],
+    "release_window_us": [
+      -15,
+      15
+    ],
+    "overlap_is_mistimed": true,
+    "exclude_conditions": {
+      "nvvdd_probe": true
+    }
+  },
+  "compass": {
+    "delay": {
+      "lo": 120,
+      "hi": 460,
+      "coarse": 30,
+      "fine": 2
+    },
+    "pw": {
+      "lo": 50,
+      "hi": 240,
+      "step": 10,
+      "fine": 2
+    },
+    "codes_extra": 2,
+    "sweep_repeats": 1,
+    "densify": {
+      "delay": [
+        2,
+        4
+      ],
+      "pw": [
+        5,
+        10
+      ],
+      "code": [
+        1,
+        -1
+      ]
+    },
+    "drift": {
+      "set": 5,
+      "offsets": [
+        -4,
+        -2,
+        0,
+        2,
+        4
+      ],
+      "shots": 1,
+      "round_interval_s": 180,
+      "pw_offsets": [],
+      "code_offsets": []
+    }
+  },
+  "lockin": {
+    "target": 0.9,
+    "confidence": 0.95
+  },
+  "batch": 4,
+  "equivalent_states": [
+    "post-park"
+  ],
+  "equivalence_note": "Post-park shots (PARK_EACH=1) count as first shots: on card E, 350 mV pw 80 twice with a park between was under/under, and without the park the second shot lost the link. Remove 'post-park' from equivalent_states to turn this off.",
+  "launcher": {
+    "mode": "firstshot"
+  }
+}

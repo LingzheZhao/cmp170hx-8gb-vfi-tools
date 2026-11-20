@@ -1,0 +1,66 @@
+{
+  "card": "e",
+  "note": "Card E (an 8 GB card in the lab write-up). floor_mv is the lowest commanded VID the search may use; on this card the PCIe link died at about 325 mV and below in every shot form, so the floor sits below that only to let the loss island be measured. Latch rules are learned from the ledger (margins 0 codes / 5 pct: 3x198 at 388 mV was under more than 40 times, 3x198 at 381 and 3x220 at 388 latched); the never list repeats them so they hold even on an empty ledger.",
+  "floor_mv": 305,
+  "pw_min_us": 47,
+  "latch": {
+    "depth_margin_codes": 0,
+    "energy_margin": 0.05
+  },
+  "never": [
+    {
+      "match": {
+        "code": [
+          0,
+          61
+        ],
+        "energy": [
+          564,
+          1000000
+        ]
+      },
+      "note": "3x198 at 381 mV (fast 1 and fast 0, restore 750) latched the MP2888B off (STATUS_WORD 0x2042, READ_VOUT 41 mV)"
+    },
+    {
+      "match": {
+        "code": [
+          0,
+          62
+        ],
+        "energy": [
+          627,
+          1000000
+        ]
+      },
+      "note": "3x220 at 388 mV (restore 750) latched the MP2888B off"
+    },
+    {
+      "match": {
+        "pw": [
+          1001,
+          1000000
+        ]
+      },
+      "note": "long flat dips (1 x 15 ms poisoned at 450-456 mV and lost the link at 375 mV) are outside the automated search"
+    }
+  ],
+  "launcher": {
+    "runner_dir": null,
+    "env": {
+      "OFFWAIT": 45,
+      "TMIN": 360,
+      "TCAP": 120
+    }
+  },
+  "firmware_expected": "lab-psr1-push2-debug",
+  "ledger": "ledger/card-e.jsonl",
+  "default_family": "families/e-slow-push2.json",
+  "families": [
+    "families/e-slow-push2.json",
+    "families/e-vr625-push2.json",
+    "families/e-compass-push2.json",
+    "families/e-compass-pw120-push2.json",
+    "families/e-std3x80-first-push2.json",
+    "families/e-std3x80-first-push1.json"
+  ]
+}

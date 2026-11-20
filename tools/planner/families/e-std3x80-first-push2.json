@@ -1,0 +1,94 @@
+{
+  "name": "e-std3x80-first-push2",
+  "card": "e",
+  "description": "Card E short-pulse standard train (3 x 80 us, gap 150, td -60, fast 1) as the FIRST shot of a fresh boot on push2 firmware (on-time release). Primary knob: VID code. Columns: restore voltage, width and timing around the base edge. push1 first shots (release +9/+10 us) are not pooled; they only seed the first probes of an empty column (prior_policy).",
+  "state_class": "first-shot-fresh-boot",
+  "base": {
+    "td": -60,
+    "pulses": 3,
+    "pw": 80,
+    "vr": 750,
+    "fast": 1,
+    "hold": 0,
+    "t_restore": -20,
+    "revert": 0
+  },
+  "primary": {
+    "knob": "code",
+    "start_mv": 450,
+    "coarse_step": 4,
+    "column_step": 1
+  },
+  "columns": [
+    {
+      "vr": 625
+    },
+    {
+      "vr": 700
+    },
+    {
+      "pw": 100
+    },
+    {
+      "pw": 60
+    },
+    {
+      "td": -50
+    },
+    {
+      "td": -70
+    },
+    {
+      "vr": 800
+    },
+    {
+      "revert": 2
+    }
+  ],
+  "repeats": 2,
+  "policy": {
+    "firmware": [
+      "lab-psr1-push2-debug",
+      "lab-psr1-push2"
+    ],
+    "release_window_us": [
+      0,
+      4
+    ],
+    "overlap_is_mistimed": true,
+    "exclude_conditions": {
+      "nvvdd_probe": true
+    }
+  },
+  "prior_policy": {
+    "firmware": [
+      "lab-psr1-push1-debug",
+      "lab-psr1-push1"
+    ],
+    "release_window_us": [
+      -15,
+      15
+    ],
+    "overlap_is_mistimed": true,
+    "exclude_conditions": {
+      "nvvdd_probe": true
+    }
+  },
+  "densify": {
+    "td": 2,
+    "pw": 5,
+    "vr": 25
+  },
+  "lockin": {
+    "target": 0.9,
+    "confidence": 0.95
+  },
+  "batch": 4,
+  "equivalent_states": [
+    "post-park"
+  ],
+  "equivalence_note": "Post-park shots (PARK_EACH=1) count as first shots: on card E, 350 mV pw 80 twice with a park between was under/under, and without the park the second shot lost the link. Remove 'post-park' from equivalent_states to turn this off.",
+  "launcher": {
+    "mode": "firstshot"
+  }
+}

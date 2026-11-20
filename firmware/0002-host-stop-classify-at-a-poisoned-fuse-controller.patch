@@ -1,7 +1,7 @@
-From 8a6aaf9b494f0a2279508be8cef953685d47b6b0 Mon Sep 17 00:00:00 2001
+From 2f1d67640d92cf95fcf085bd779569af785532e9 Mon Sep 17 00:00:00 2001
 From: darkmaniac7 <31073889+darkmaniac7@users.noreply.github.com>
 Date: Thu, 19 Nov 2026 07:29:22 -0600
-Subject: [PATCH 2/3] host: stop classify at a poisoned fuse controller
+Subject: [PATCH 02/10] host: stop classify at a poisoned fuse controller
 
 A shot that disturbs the fuse read can leave the fuse controller poisoned:
 FUSECTRL (0x820000) reads 0xBADFxxxx and the controller stops answering

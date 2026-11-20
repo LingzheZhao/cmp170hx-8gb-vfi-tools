@@ -1,0 +1,79 @@
+From e52c40360017d2761bbf18f069c5479248c2bdea Mon Sep 17 00:00:00 2001
+From: darkmaniac7 <31073889+darkmaniac7@users.noreply.github.com>
+Date: Fri, 20 Nov 2026 06:45:45 -0600
+Subject: [PATCH 10/10] host: passive_snapshot stops at 0xBAD0 reads, a busy
+ FUSECTRL or GFW
+
+Run on one card on 2026-11-20 as part of the push2 runner, which
+carries a copy of observe().
+
+- A value of 0xBAD0xxxx (an error read, seen at FUSECTRL on one card
+  with the link up) stops the read as poisoned, like 0xBADFxxxx,
+  instead of being read past.
+- FUSECTRL must read exactly the idle value 0xE0040000; anything else
+  stops before DSOV is read. Every FUSECTRL read in the lab's three
+  goldilocks logs was 0xE0040000.
+- GFW boot status must have its low byte at 0xFF; any other value is
+  "booting" (before, only 0x01 was).
+
+Test: host/test_passive_snapshot.py.
+---
+ host/passive_snapshot.py      | 16 +++++++++++++---
+ host/test_passive_snapshot.py | 10 ++++++++++
+ 2 files changed, 23 insertions(+), 3 deletions(-)
+
+diff --git a/host/passive_snapshot.py b/host/passive_snapshot.py
+index 821aba9..5665515 100644
+--- a/host/passive_snapshot.py
++++ b/host/passive_snapshot.py
+@@ -1,4 +1,8 @@
+-"""Read the diagnostic registers without writes, stopping at the first bad read."""
++"""Read the diagnostic registers without writes, stopping at the first bad read.
++
++Stops at a 0xBADF or 0xBAD0 value, an I/O error, an all-ones response (PLM excepted), a FUSECTRL other than the idle
++0xE0040000, a GFW boot status whose low byte is not 0xFF (still booting), or a DSOV other than 0 or 1. The same rules
++are copied into the per-boot runner of the cmp170hx-8gb-vfi-tools repository (tools/runner/bisect_shots.py)."""
+ from __future__ import annotations
+ 
+ import argparse
+@@ -33,11 +37,17 @@ def observe(read32: Callable[[int], int]) -> dict:
+         if value & 0xFFFF0000 == 0xBADF0000:
+             result.update(state="poisoned", reason=f"{name}: BADF sentinel")
+             return result
++        if value >> 20 == 0xBAD:
++            result.update(state="poisoned", reason=f"{name}: BAD0 error read")
++            return result
+         if value == 0xFFFFFFFF and name != "PLM":
+             result["reason"] = f"{name}: all-ones response"
+             return result
+-        if name == "GFW" and value & 0xFF == 1:
+-            result.update(state="booting", reason="GFW low byte is 0x01")
++        if name == "FUSECTRL" and value != 0xE0040000:
++            result["reason"] = f"FUSECTRL: unexpected non-idle value 0x{value:08x}"
++            return result
++        if name == "GFW" and value & 0xFF != 0xFF:
++            result.update(state="booting", reason=f"GFW low byte is 0x{value & 0xFF:02x}, not 0xff")
+             return result
+         if name == "DSOV" and value not in (0, 1):
+             result["reason"] = "DSOV: unexpected value"
+diff --git a/host/test_passive_snapshot.py b/host/test_passive_snapshot.py
+index b461785..268da91 100644
+--- a/host/test_passive_snapshot.py
++++ b/host/test_passive_snapshot.py
+@@ -41,6 +41,16 @@ class PassiveSnapshotTest(unittest.TestCase):
+                 self.assertEqual(len(calls), len(values))
+                 self.assertIsNone(result["registers"]["DSOV"])
+ 
++    def test_stops_on_bad0_nonidle_fusectrl_and_unready_gfw(self):
++        for values, state, reason in [([0xE0040000, 0x3FF, 0, 0xBAD00100], "poisoned", "CRC: BAD0"),
++                                      ([0xE0040001], "unknown", "FUSECTRL: unexpected non-idle"),
++                                      ([0xE0040000, 0x302], "booting", "not 0xff")]:
++            with self.subTest(values=values):
++                result, calls = self.run_reads(values)
++                self.assertEqual(result["state"], state)
++                self.assertIn(reason, result["reason"])
++                self.assertEqual(len(calls), len(values))
++
+     def test_candidate_is_not_active_validation(self):
+         result, _ = self.run_reads([0xE0040000, 0x3FF, 0, 0x55, 0xFFFFFFFF])
+         self.assertEqual(result["state"], "candidate")

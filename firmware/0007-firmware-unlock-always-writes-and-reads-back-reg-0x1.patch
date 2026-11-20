@@ -1,10 +1,12 @@
-From 9fead0a66194dcdd796f490b7569705d5dadb0f6 Mon Sep 17 00:00:00 2001
+From 49ebc1f373ea7505670a0d65b4ec75c5e496dd71 Mon Sep 17 00:00:00 2001
 From: darkmaniac7 <31073889+darkmaniac7@users.noreply.github.com>
 Date: Fri, 20 Nov 2026 01:24:02 -0600
-Subject: [PATCH 2/3] firmware: unlock always writes and reads back reg 0x13
+Subject: [PATCH 07/10] firmware: unlock always writes and reads back reg 0x13
  and config ID 0x1229
 
-EXPERIMENTAL: built, not run on hardware.
+The lab ran this behavior on 2026-11-20 as part of push1 (every `u`
+printed "unlock MATCH wp=00 cfg=1229"); the code here is arranged
+differently from the lab's build, so this exact build was not run.
 
 unlock_cmd returns early when CML already shows MATCH, so a controller
 that kept its unlock across a soft-off (the Pico stays powered over USB

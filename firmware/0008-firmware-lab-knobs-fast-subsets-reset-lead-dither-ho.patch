@@ -1,10 +1,12 @@
-From 692ff17ff1d4ecbb4a206b0aab4302f903b2e67e Mon Sep 17 00:00:00 2001
+From 9fa742720586c45595df95fac3c12d992d59a8ef Mon Sep 17 00:00:00 2001
 From: darkmaniac7 <31073889+darkmaniac7@users.noreply.github.com>
 Date: Fri, 20 Nov 2026 01:08:38 -0600
-Subject: [PATCH 3/3] firmware: lab knobs (fast subsets, reset lead, dither,
+Subject: [PATCH 08/10] firmware: lab knobs (fast subsets, reset lead, dither,
  hold at release, rail_code)
 
-EXPERIMENTAL: built, not run on hardware. With fast 0/1, t_restore above
+On one card on 2026-11-20 the fast subsets ran on push2, and the dither
+and the post-train SCL hold on push1; a hold that starts at the
+release has not been run. With fast 0/1, t_restore above
 -1000, revert 0/1 and hold 0 the timeline is unchanged.
 
 - fast 2..7: one subset of the fast profile (2 = 0x30+0x32, 3 = 0x30,

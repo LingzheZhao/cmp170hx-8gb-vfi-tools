@@ -1,6 +1,6 @@
 # Firmware and host patches for pico-ga100vfi
 
-Five changes to [dalzyu/pico-ga100vfi](https://github.com/dalzyu/pico-ga100vfi), made against commit `e1ebd97`.
+Ten changes to [dalzyu/pico-ga100vfi](https://github.com/dalzyu/pico-ga100vfi), made against commit `e1ebd97`.
 Apply them with `git am`:
 
 ```sh
@@ -8,12 +8,21 @@ cd pico-ga100vfi && git checkout e1ebd97
 git am /path/to/cmp170hx-8gb-vfi-tools/firmware/*.patch
 ```
 
-`series` lists them in order. Built with pico-sdk 2.3.1 and the Arm GNU toolchain 14.2 for `pico2_w` (RP2350A and
-RP2350B) and the RP2350A debug build, with no warnings. Patches 0001-0003 give the firmware the lab ran on its
-cards up to 2026-11-19 (the debug build is byte-identical; the normal build differs only in its embedded build
-date). With 0004 applied the firmware is the timing build the lab ran from 2026-11-20 (`fw=lab-psr1-timing1`).
+`series` lists them in order. Some are made with one line of context, so apply the whole series on exactly that base.
+Built with pico-sdk 2.3.1 and the Arm GNU toolchain 14.2 for `pico2_w` (RP2350A and RP2350B) and `pico2`, normal and
+debug builds, with no warnings.
 
-Three more firmware changes, built but not yet run on a card, are in `../experimental/firmware`.
+| After patch | Firmware marker | What the lab ran |
+|---|---|---|
+| 0003 | `fw=lab-psr1` | the firmware on its cards up to 2026-11-19 (debug build byte-identical) |
+| 0004 | `fw=lab-psr1-timing1` | the timing build, from 2026-11-20 (debug build byte-identical) |
+| 0008 | `fw=lab-psr1-push1` | push1, on one card on 2026-11-20 |
+| 0009 | `fw=lab-psr1-push2` | push2, on one card on 2026-11-20 (about 500 shots); the current firmware |
+
+`-debug` is appended in the debug build. The lab's push1 and push2 builds arrange the unlock readback of patch 0007
+inside the stock unlock function; here it is a separate function after it, so the patched upstream file never
+carries the controller's unlock code in a diff. Behavior is the same; checksums differ from the lab's builds. The
+runner in `../tools/runner` needs push1 or push2 and is meant for push2.
 
 ## 0001: restore the card's own VRM profile after each shot
 
@@ -90,6 +99,70 @@ Host side:
 
 Run the host tests from the patched tree: `cd host && python3 -m unittest test_classify test_passive_snapshot
 test_serial_response` (needs pyserial).
+
+## 0006: release `PEX_RST` from a hardware alarm at exactly t = 0 (push1)
+
+The step loop blocks for every PMBus write (about 47 µs each), so a write due at or just before t = 0 used to push
+the release late by up to one write (on one bench a single 36 µs pulse at `t_dip` +81 µs released at +59 µs). The
+release is now a hardware alarm armed at t0, at the highest IRQ priority on core 0; the release step is gone from the
+timeline. The assert step is skipped if the release has already fired, the pin is released unconditionally after the
+timeline, and every shot prints `release_at=<us> scheduled=0 via=<alarm|fallback>`. Before the shot a
+`glitch WARN` line names every scheduled write that overlaps t = 0. On the bench the releases then landed 1 to 4 µs
+after t = 0, except the first release of every boot, which came 9 to 10 µs late (fixed in 0009).
+
+## 0007: `u` always writes and reads back reg `0x13` and config ID `0x46`
+
+The stock unlock returns early when the controller already reports MATCH, which happens after a soft-off because the
+Pico and the standby rail stay powered; then reg `0x13` = `0x00` and config ID `0x46` = `0x1229` (which stop the
+GPU's devinit from locking the controller again) were never written. A separate `unlock_config()` now runs after the
+stock unlock on every `u`, writes both, reads them back and prints `unlock MATCH wp=00 cfg=1229` (`LOCKED` or `ERR`
+otherwise). The runner stops unless it reads exactly that line.
+
+## 0008: lab knobs (push1)
+
+All off by default; with `fast` 0 or 1, `t_restore` above -1000, `revert` 0 or 1 and `hold_ms` 0 the timeline is
+unchanged. `fast` 2..7 applies one subset of the fast profile (2 = `0x30` + `0x32`, 3 = `0x30`, 4 = `0x32`,
+5 = `0xBA`, 6 = `0xB9`, 7 = `0x45`); `t_restore` <= -1000 moves the reset and the 600 mV setup write earlier so a long
+dip is not overwritten; `revert=2` is a one-VID dither inside the train; `hold_ms` with a train that ends before t = 0
+holds SCL from the release; after a shot that leaves READ_VOUT below 500 the firmware prints
+`rail_code=... status ...` (READ_VOUT and seven status bytes). On one card the fast subsets 2..7 were run at the
+card's brown-out floor and changed nothing there. The dither and SCL hold runs on push1 had a write overlapping the
+release (a clean test needs push2), and a hold that starts at the release has not been run.
+
+## 0009: push2, the current firmware
+
+Release timing:
+
+- The release handler is installed directly on the alarm IRQ, at the highest priority, and runs from SRAM with no
+  flash code on its path (push1 used the SDK's dispatcher in flash; its first release of every boot came 9 to 10 µs
+  late, which fits a cold XIP cache). Before every shot a throwaway alarm exercises the IRQ path and prints
+  `prime_at=<us>`; a priming alarm that never runs aborts the shot. On one card the first shot of three fresh boots
+  then released at 0.
+- Core 1 feeds the watchdog with a busy wait instead of `sleep_us`, whose alarm-pool IRQ runs on core 0 with
+  interrupts masked and could delay the release.
+- Nothing is printed between the command and the end of the shot; the echo, WARN and FAIL lines follow it.
+
+Fail closed:
+
+- The release alarm is armed by the assert step after `PEX_RST` is low, so it can never release a card that was not
+  put in reset; an assert more than one write late fails the shot.
+- Refused before anything is written (`glitch ABORT: ...`): a VOUT step that the 600 mV setup write would
+  overwrite, and any PMBus write in flight across t = 0, counting 47 µs per write and the queueing of back-to-back
+  writes.
+- The timeline stops at its first failed action; the stock rail is written while the card is still in reset when
+  possible, then `PEX_RST` is released (`via=abort`); a FAIL line names the step.
+- VRM profile: a tainted capture or reuse of an older capture is refused, `u` forgets the capture, the fast profile
+  write is checked (except the full profile's `0x31` write, which this controller refuses), and the restore writes
+  back only the registers the fast value touched and reads them back.
+- SCL: after a hold the firmware waits up to 200 µs for SCL to read high and 200 µs more before the next PMBus write;
+  the stock VOUT write after a hold from the release retries for up to 500 µs. Dither pulses are at least 47 µs.
+
+## 0010: passive_snapshot stops at 0xBAD0 reads, a busy FUSECTRL or GFW
+
+`host/passive_snapshot.py` gets the stop rules of the push2 runner, which carries a copy of `observe()`: a
+`0xBAD0xxxx` value stops the read as poisoned (seen at FUSECTRL on one card with the link up, about 1 to 2 % of
+shots at large delays, never on an exact repeat), FUSECTRL must read exactly the idle `0xE0040000`, and GFW boot
+status must end in `0xFF`. Test: `host/test_passive_snapshot.py`.
 
 ## Not a firmware change: park and rescue
 

@@ -3,3 +3,8 @@
 0003-firmware-show-the-firmware-marker-in-the-debug-build.patch
 0004-firmware-per-step-timing-telemetry-host-passive-snap.patch
 0005-host-classify-stops-at-a-0xBADF-DSOV-the-EN_SW_OVERR.patch
+0006-firmware-release-PEX_RST-from-a-hardware-alarm-at-ex.patch
+0007-firmware-unlock-always-writes-and-reads-back-reg-0x1.patch
+0008-firmware-lab-knobs-fast-subsets-reset-lead-dither-ho.patch
+0009-firmware-push2-RAM-release-handler-primed-alarm-fail.patch
+0010-host-passive_snapshot-stops-at-0xBAD0-reads-a-busy-F.patch

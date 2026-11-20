@@ -1,8 +1,8 @@
 From f5a85faba799cbedd78f0dfbe6b4ae141eed35a7 Mon Sep 17 00:00:00 2001
 From: darkmaniac7 <31073889+darkmaniac7@users.noreply.github.com>
 Date: Fri, 20 Nov 2026 01:07:20 -0600
-Subject: [PATCH 5/5] host: classify stops at a 0xBADF DSOV; the EN_SW_OVERRIDE
- write is opt-in
+Subject: [PATCH 05/10] host: classify stops at a 0xBADF DSOV; the
+ EN_SW_OVERRIDE write is opt-in
 
 Two changes to classify(), both run on the lab's bench:
 

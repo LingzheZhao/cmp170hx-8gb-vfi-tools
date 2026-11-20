@@ -1,7 +1,7 @@
 From 6b742af996378865b1090b4fcba74c4d6a842b57 Mon Sep 17 00:00:00 2001
 From: darkmaniac7 <31073889+darkmaniac7@users.noreply.github.com>
 Date: Fri, 20 Nov 2026 01:06:13 -0600
-Subject: [PATCH 4/5] firmware: per-step timing telemetry; host: passive
+Subject: [PATCH 04/10] firmware: per-step timing telemetry; host: passive
  snapshot, full-line replies
 
 firmware (marker fw=lab-psr1-timing1, fw=lab-psr1-timing1-debug in the

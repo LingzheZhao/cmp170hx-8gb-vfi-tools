@@ -28,6 +28,7 @@ class Sim:
         self.e1, self.vout_code, self.crashed, self.link = vc.E1_GPU, 0x7E, False, True
         self.state = "stock"
         self.outcome_fn, self.fw = outcome_fn, fw
+        self.report_e1 = None                   # set to make the next shots report this E1 (NO DIP tests)
         self.events, self.cfg_reads, self.bad_cfg_reads = [], 0, 0
         self.link_after_held_reset = True
         self.crash_after_handback = False
@@ -115,7 +116,8 @@ class FakeCard:
         s.crashed = o == "lost"
         s.link = not s.crashed
         s.state = o
-        return Report(True, s.e1, None, 0, "glitch done")
+        e1 = s.report_e1 if s.report_e1 is not None else s.e1
+        return Report(True, e1, None, 0, "glitch done")
 
     def trace(self):
         return [400] * 60 + [300] * 20 + [880] * 20
@@ -125,12 +127,13 @@ REGS = {  # outcome -> (FUSECTRL, DSOV, CRC, PLM)
     "under": (0x00040000, 1, 0x55, 0x0), "over": (0x00040000, 0, 0x00, 0xFFFFFEFE),
     "hit": (0x00040000, 0, 0x55, 0xFFFFFEFE), "goldilocks": (0x00040000, 0, 0x55, 0xFFFFFFFF),
     "poisoned": (0xBADF510E, 0, 0, 0), "stock": (0x00040000, 1, 0x55, 0x0),
+    "dsov_poisoned": (0x00040000, 0xBADF1701, 0, 0),
 }
 
 
 class FakeBar:
     def __init__(self, sim):
-        self.sim, self.reads = sim, []
+        self.sim, self.reads, self.writes = sim, [], []
 
     def __call__(self, bdf, size=None):
         return self
@@ -146,11 +149,13 @@ class FakeBar:
         self.reads.append(off)
         if self.sim.state == "poisoned" and off != vc.FUSECTRL:
             raise AssertionError(f"BAR0 read {off:#x} on a poisoned controller")
+        if self.sim.state == "dsov_poisoned" and off not in (vc.FUSECTRL, 0x820084):
+            raise AssertionError(f"BAR0 read {off:#x} after a 0xBADF DSOV")
         return {vc.FUSECTRL: ctrl, 0x820084: dsov, 0x824314: 0x12345678, 0x820040: 1, 0x8200FC: plm,
                 0x820070: crc}.get(off, 0)
 
     def wr32(self, off, v):
-        pass
+        self.writes.append((off, v))
 
 
 class Rig:
@@ -265,6 +270,38 @@ class ShotTests(unittest.TestCase):
             s = vc.read_outcome(BDF, 0.25)
         self.assertEqual(s.outcome, "poisoned")
         self.assertEqual(rig.bar.reads, [vc.FUSECTRL])
+
+    def test_poisoned_dsov_reads_nothing_more(self):
+        sim = Sim(lambda a: "dsov_poisoned")
+        with Rig(sim) as rig:
+            card = FakeCard(sim)
+            card.attempt(vc.make_attempt(331, -60, 750, -20, 3, 198, 150, 117, 1))
+            s = vc.read_outcome(BDF, 0.25)
+        self.assertEqual(s.outcome, "poisoned")
+        self.assertEqual(rig.bar.reads, [vc.FUSECTRL, vc.FUSECTRL, 0x820084])
+        self.assertEqual(rig.bar.writes, [])
+
+    def test_classify_writes_nothing_by_default(self):
+        old = os.environ.pop("CLASSIFY_WRITE", None)
+        try:
+            sim = Sim(lambda a: "goldilocks")
+            with Rig(sim) as rig:
+                card = FakeCard(sim)
+                card.attempt(vc.make_attempt(356, -60, 750, -20, 3, 198, 150, 117, 1))
+                self.assertEqual(vc.read_outcome(BDF, 0.25).outcome, "goldilocks")
+            self.assertEqual(rig.bar.writes, [])
+        finally:
+            if old is not None:
+                os.environ["CLASSIFY_WRITE"] = old
+
+    def test_no_dip_stops_the_run(self):
+        sim = Sim(lambda a: "under")
+        sim.report_e1 = vc.E1_GPU                # the controller handed back / ignored the shot
+        with Rig(sim):
+            rc, out = run_tool("vfi_hunt", ARGS + ["--budget", "5"])
+        self.assertEqual(rc, 3, out)
+        self.assertIn("NO DIP", out)
+        self.assertEqual(sum(1 for e in sim.events if e[0] == "g"), 1)
 
     def test_outcome_mapping(self):
         for o in ("under", "over", "hit", "goldilocks"):

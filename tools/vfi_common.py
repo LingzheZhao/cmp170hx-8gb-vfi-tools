@@ -388,7 +388,9 @@ def read_outcome(bdf: str, restore_wait: float) -> Shot:
             return Shot("lost", fusectrl=ctrl)
         if is_poisoned(ctrl):
             return Shot("poisoned", fusectrl=ctrl)
-        v = classify(bar)
+        v = classify(bar)       # firmware/0005: passive by default (no EN_SW_OVERRIDE write)
+    if is_poisoned(v.dsov):
+        return Shot("poisoned", fusectrl=ctrl)  # DSOV 0xBADFxxxx behind a healthy FUSECTRL; classify read nothing more
     if v.passed:
         out = "goldilocks"
     elif v.dsov == 1:
@@ -418,6 +420,10 @@ def fire(card, bdf: str, attempt, restore_wait: float, want_trace: bool = False)
         except IOError:
             pass
         return Shot("nack", writes_failed=rep.writes_failed)
+    if attempt.revert == 0 and (not rep.pwd or rep.e1 != E1_PMBUS):
+        # A locked controller acknowledges the dip writes and discards them: the shot did not run.
+        raise BenchStop(f"NO DIP: after the shot the controller reports pwd={int(rep.pwd)} e1={rep.e1:#06x} "
+                        f"(want pwd=1, e1={E1_PMBUS:#06x}); the shot did not run")
     tr = [round(x * 3300.0 / 4096.0, 1) for x in card.trace()] if want_trace else []
     s = read_outcome(bdf, restore_wait)
     s.trace_mv, s.writes_failed = tr, rep.writes_failed

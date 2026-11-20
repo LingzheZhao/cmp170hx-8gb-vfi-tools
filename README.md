@@ -3,10 +3,10 @@
 Bench tools and firmware fixes for the Pico voltage-glitch ("goldilocks") method on NVIDIA CMP 170HX 8 GB cards
 (`10de:20c2`), built on [dalzyu/pico-ga100vfi](https://github.com/dalzyu/pico-ga100vfi).
 
-With this glitch setup, and a separate burn step that is not part of this repository, the lab finished two
-8 GB cards in November 2026: compute from 70 to 122 and 120 SMs (126 and 124
-with the RECONFIG override), the 80 GB memory layout, and PCIe fuses that advertise 2.5 to 16 GT/s, all read back
-after a cold boot. The method, wiring, parts and results are on cmp.wiki:
+With this glitch setup, and a separate burn step that is not part of this repository, the lab finished three
+8 GB cards in November 2026: compute from 70 to 122, 120 and 108 SMs (126, 124 and 112 with the RECONFIG
+override), the 80 GB memory layout, and PCIe fuses that advertise 2.5 to 16 GT/s, all read back after a cold boot.
+The method, wiring, parts and results are on cmp.wiki:
 
 - [Voltage-glitch unlock: lab method on a Pico 2 W](https://cmp.wiki/wiki/Voltage-glitch_unlock:_lab_method_on_a_Pico_2_W)
 - [Voltage-glitch unlock: lab results and fuse findings](https://cmp.wiki/wiki/Voltage-glitch_unlock:_lab_results_and_fuse_findings)
@@ -21,7 +21,9 @@ after a cold boot. The method, wiring, parts and results are on cmp.wiki:
 
 | Path | What |
 |---|---|
-| `firmware/` | Three patches against pico-ga100vfi (`git am`-ready), with a README: each card's own VRM profile restored after every shot, a classifier that stops at a poisoned fuse controller, a firmware marker in the debug build |
+| `firmware/` | Five patches against pico-ga100vfi (`git am`-ready), with a README: each card's own VRM profile restored after every shot, a classifier that stops at a poisoned fuse controller (FUSECTRL or DSOV) and no longer writes EN_SW_OVERRIDE unless asked, a firmware marker, per-step timing telemetry, a passive BAR0 snapshot, and serial replies read to the end of the line |
+| `tools/runner/` | The per-boot runner (`bisect_shots.py`), park and preflight, and the boot launcher (`bootrun.sh`: power cycle, fresh-boot guard, plan checksum, host guard, preflight, identity, temperature gate, runner, hold hook), as the lab ran them; see `docs/RUNNER.md` |
+| `tools/diag/` | Two gentle 700 mV checks: where the `PEX_RST` release lands per kind of shot (`timing_controls.py`), and whether EN_SW_OVERRIDE survives `PEX_RST` (`enswtest.py`) |
 | `tools/vfi_preflight.py` | Read-only checks before a session: firmware marker, who controls the rail, the card's six VRM profile registers (stops on a leftover fast value), host lockdown, driver, config space, FUSECTRL, GFW boot progress |
 | `tools/vfi_park.py` | Hold NVVDD at stock under PMBus, pulse PEX_RST, wait, read config space, hand the rail back |
 | `tools/vfi_rescue.py` | The same sequence step by step with diagnostics, for a card whose link is gone after a crash |
@@ -29,8 +31,12 @@ after a cold boot. The method, wiring, parts and results are on cmp.wiki:
 | `tools/vfi_trace.py` | NVVDD trace capture per shot with its outcome (debug firmware), back-to-back or first-shot mode |
 | `tools/vfi_hunt.py` | Stop-and-hold hunter: shots at one setting until a clean goldilocks, which it leaves held |
 | `tools/vfi_edge.py` | Edge tracker: walks the train timing along a card's lethal edge in short cells, with a crash budget |
-| `tools/vfi_common.py` | Shared code: park, poison-safe classify, bounds, per-boot shot ledger |
-| `tests/` | Offline tests against a simulated Pico, voltage controller and card |
+| `tools/vfi_common.py` | Shared code: park, poison-safe classify, bounds, the no-dip check, per-boot shot ledger |
+| `tests/` | Offline tests against a simulated Pico, voltage controller and card, and a fake `ga100vfi` package for the runner |
+| `experimental/` | **Not yet run on hardware**: firmware that releases `PEX_RST` from a hardware alarm, an unlock that always writes and reads back the config registers, extra lab knobs, and a runner for them. See its README |
+| `docs/MEASUREMENTS.md` | What the bench measured: write time, release slip, the 36 µs width floor, EN_SW_OVERRIDE, sticky poison, the controller-off latch |
+| `docs/RUNNER.md` | How to use the runner and the launcher |
+| `docs/AUTONOMOUS_AGENT.md` | Running the bench with an LLM agent: access, the loop, the guard rails, what stays with people |
 | `docs/UPSTREAM_PR.md` | Pull request text for the firmware patches |
 
 ## Setup
@@ -38,7 +44,8 @@ after a cold boot. The method, wiring, parts and results are on cmp.wiki:
 Hardware, wiring and probe placement: see the
 [method page](https://cmp.wiki/wiki/Voltage-glitch_unlock:_lab_method_on_a_Pico_2_W#Parts_and_host). In short: a
 Raspberry Pi Pico 2 W class board (RP2350), four needles on the back of the card (SDA, SCL, PEX_RST_BUF*, ground),
-an optional fifth on NVVDD for the debug build's ADC. No soldering.
+an optional fifth on NVVDD for the debug build's ADC. No soldering. Take the NVVDD lead off while you glitch: on the
+lab's bench an attached lead made one card crash 30 to 70 mV earlier.
 
 Host, before the first shot:
 
@@ -60,8 +67,9 @@ git am /path/to/cmp170hx-8gb-vfi-tools/firmware/*.patch
 python3 -m venv ~/vfi-venv && ~/vfi-venv/bin/pip install ./host
 ```
 
-Flash the Pico before any lead touches PEX_RST. The debug build (`-DDEBUG=ON`) is needed only for `vfi_trace.py`;
-it samples NVVDD on GP26 on RP2350A boards (GP42 on RP2350B).
+Flash the Pico before any lead touches PEX_RST. With all five patches the firmware reports `fw=lab-psr1-timing1`
+(`-debug` in the debug build). The debug build (`-DDEBUG=ON`) is needed only for NVVDD traces; it samples NVVDD on
+GP26 on RP2350A boards (GP42 on RP2350B).
 
 ## Use
 
@@ -91,12 +99,24 @@ sudo -E $PY tools/vfi_edge.py --v-dips 356,356,362 --t-dip-start -140 --crash-bu
 sudo -E $PY tools/vfi_trace.py --out traces.json --shots 5 338:-60 331:0
 # link gone after a crash
 sudo -E $PY tools/vfi_rescue.py
+# the lab's per-boot runner, by hand: a ladder in 5-shot cells (docs/RUNNER.md)
+sudo -E $PY -I tools/runner/bisect_shots.py 'card X' '[[450,-60,3,198,750,1,2],[381,-60,3,80,750,1,5]]'
 ```
 
-Exit codes: 0 done (or goldilocks held), 1 nothing found or a check failed, 3 stopped by a safety check (the
-message says which), 4 park or rescue failed, 5 serial or sysfs error.
+Exit codes of `tools/vfi_*.py`: 0 done (or goldilocks held), 1 nothing found or a check failed, 3 stopped by a
+safety check (the message says which), 4 park or rescue failed, 5 serial or sysfs error. The runner and the
+launcher have their own (`docs/RUNNER.md`).
 
 If one CPU core of your host is suspect, the tools run fine under `taskset`.
+
+## Running a campaign unattended
+
+`tools/runner/bootrun.sh` runs one boot per call: power cycle (Wake-on-LAN or IPMI), fresh-boot guard, plan
+checksum, host guard, preflight, card identity, temperature gate, then the runner with a time limit. When the runner
+holds a goldilocks, the launcher runs your `ON_HOLD` command if you set one, and otherwise stops and reports. Hosts,
+addresses and the card table live in `tools/runner/bench.conf` (start from `bench.conf.example`). The lab drives
+this loop with an LLM agent; `docs/AUTONOMOUS_AGENT.md` describes what the agent gets, the loop, the guard rails and
+what stays with people.
 
 ## Shot outcomes
 
@@ -105,10 +125,12 @@ If one CPU core of your host is suspect, the tools run fine under `taskset`.
 | under | DSOV still 1 | dip too shallow, or at the wrong time |
 | over | DSOV 0, CRC not `0x55` | too deep |
 | hit | DSOV 0 and CRC `0x55`, another check fails (usually the privilege mask) | close, not burnable |
-| goldilocks | all five checks pass: DSOV 0, CRC `0x55`, privilege mask `0xFFFFFFFF`, FPF row readable, DSOV write-back works | the target state |
+| goldilocks | DSOV exactly 0, CRC `0x55`, privilege mask `0xFFFFFFFF`, FPF row readable (and the DSOV write-back, when `CLASSIFY_WRITE=1`) | the target state |
 | lost | no link after the shot | the GPU crashed; the next park or shot resets it |
 | nack | the voltage controller did not answer on I2C | seen only at crash-prone settings: a crashing GPU disturbs the shared I2C bus |
-| poisoned | FUSECTRL `0xBADFxxxx` | the dip disturbed the fuse read itself; nothing else is read, the next reset clears it |
+| poisoned | FUSECTRL or DSOV `0xBADFxxxx` | the dip disturbed the fuse read itself; nothing else is read. It stays poisoned until a power cycle: end the boot |
+| no dip | the reply shows `pwd=0` or `e1` other than `0xc2fa` | the controller dropped the dip writes; the shot did not run |
+| controller off | STATUS_WORD `0x2042`, READ_VOUT about 41 mV | the MP2888B turned its output off; no core power until a power cycle |
 
 A poisoned shot read with the stock classifier shows DSOV 0, CRC 0 and privilege mask 0 because nothing was read.
 Count a real DSOV flip only when the privilege mask is nonzero. One card here gave about 600 "hit" shots with the
@@ -121,19 +143,23 @@ privilege mask stuck at `0xFFFFFEFE`; a sense on one of them poisoned the contro
   40 mV shallower (270 against 230 mV on the Pico ADC). The two behave like two different settings. One card's
   second goldilocks was the first shot of a cell, right after a park; on another card the lethal timing edge moved
   about 45 µs later in first-shot mode. `--first-shot` parks before every shot.
-- **Timing is a continuous knob.** `t_dip` sets when the pulse train starts relative to the PEX_RST release (tool
-  default -60 µs) and moves in 1 µs steps; depth moves in 6.25 mV controller codes (354 and 356 mV are the same
-  code). One card's DSOV flip had a 4 µs wall (-66 µs never flipped, -62 µs did). Another hit after the standard
-  3 x 198 µs train was slid 60 µs later. On a third, the line between surviving and crashing was 1 µs wide and did
-  not drift. `vfi_edge.py` walks that line; pulse width is the other fine knob.
+- **Timing is a continuous knob, with one trap.** `t_dip` sets when the pulse train starts relative to the PEX_RST
+  release (tool default -60 µs) and moves in 1 µs steps; depth moves in 6.25 mV controller codes (354 and 356 mV are
+  the same code). One card's DSOV flip had a 4 µs wall (-66 µs never flipped, -62 µs did). Another hit after the
+  standard 3 x 198 µs train was slid 60 µs later. The trap: the firmware cannot release `PEX_RST` while a voltage
+  write is running, so a shot whose write overlaps t = 0 releases late (up to about 60 µs), and a timing map across
+  that region moves the release along with `t_dip`. The default train at -60 µs releases on time. Table in
+  `docs/MEASUREMENTS.md`. Pulse widths below 36 µs are sent as 36 µs.
 - **Temperature.** Let the card settle at its normal idle temperature and hold it there with a fan. Cooling moved
-  one card's edge up one code, 43.7 C moved it down, and at 47-49 C every shot was lost. The two hits here came at
-  about 40 C and 36 C, read from the controller's own sensor (READ_TEMP1, taken as 0.1 C per bit; the scale is not
+  one card's edge up one code, 43.7 C moved it down, and at 47-49 C every shot was lost. The hits here came at about
+  36 to 40 C, read from the controller's own sensor (READ_TEMP1, taken as 0.1 C per bit; the scale is not
   confirmed, so watch the trend, not the number).
 - **Shots per boot.** The lab kept to about 200-450 shots between host reboots, in line with community reports
   that nothing hits after about 500 shots on one boot. Every tool that glitches counts shots and lost shots per
   host boot (`--max-shots-per-boot`, default 450; `--max-lost-per-boot`, default 150) in `--state-dir`, and stops at
-  the cap. `vfi_edge.py` adds a per-run `--crash-budget` (default 60).
+  the cap. `vfi_edge.py` adds a per-run `--crash-budget` (default 60); the runner has `SHOTCAP`.
+- **Pulse length and the controller-off latch.** On one card, 3 x 198 µs trains at 381 mV latched the controller off,
+  while trains of 80-120 µs pulses at 388-356 mV did not. Start a new card shallow and step down.
 - **Cards differ.** Commanded depth at the hit ranged from 300 to 356 mV across sessions and cards. One card never
   reached goldilocks in about 4,000 shots: it went from under straight to a crash at every depth and timing tried,
   with the fuse read and the lethal event inside the same few microseconds. Details on the results page.
@@ -149,32 +175,53 @@ privilege mask stuck at `0xFFFFFEFE`; a sense on one of them poisoned the contro
   after the handback, the rail is taken back. Every tool that glitches parks at the start, between cells and on
   exit (also on Ctrl-C or a safety stop), except when it holds a goldilocks.
 - **Poison-safe reads.** FUSECTRL is read first after every shot and in the snapshot; on `0xBADFxxxx` nothing else
-  is read. This works with the stock classifier too; patch 0002 adds the same check upstream.
+  is read, and the same holds for a `0xBADF` DSOV (patch 0005). A poisoned controller stays poisoned until a power
+  cycle, so a poisoned shot ends the run.
+- **No EN_SW_OVERRIDE writes.** The stock classifier wrote `0x820040` (EN_SW_OVERRIDE) after every shot, and that
+  bit survives PEX_RST. With patch 0005 the classifier only reads it, unless you set `CLASSIFY_WRITE=1`.
+- **Check that the shot ran.** After every shot the reply must show `pwd=1` and `e1=0xc2fa`; a locked controller
+  acknowledges the dip writes and discards them, and the shot would read "under".
 - **Firmware and profile checks.** With the fast VRM profile, the tools refuse firmware without the profile
   save/restore patch (stock firmware writes its author's VRM table onto your card after every shot) and refuse to
   start when one of the six profile registers holds its fast value (an interrupted shot: power the card fully off).
 - **Bounds.** The firmware has no voltage limits of its own. The tools accept dips of 280-400 mV, recovery of
-  550-800 mV, 1-5 pulses of 36-400 µs and `t_dip` within ±1000 µs, and stop otherwise.
+  550-800 mV, 1-5 pulses of 36-400 µs and `t_dip` within ±1000 µs, and stop otherwise. The runner refuses dips below
+  `FLOOR` and recovery outside 575-825 mV.
 - **No driver, no lockdown.** The tools stop if the card is bound to anything but `pci-stub` (or nothing), if the
   `nvidia` module is loaded while the card is not held by `pci-stub`, or if kernel lockdown is on.
 - **Reads only.** The snapshot is BAR0 reads only by default. `--rows` writes nothing but FUSEADDR and the READ
   command to FUSECTRL, behind an allowlist, never DEBUGCTRL, and restores FUSEADDR. Fuse dumps and the upstream
-  campaign's goldilocks log identify the card: keep them private.
+  campaign's goldilocks log identify the card: keep them private. `tools/diag/enswtest.py` writes EN_SW_OVERRIDE on
+  purpose (that is what it tests) and says so.
 - **The firmware's `u` command** writes the voltage controller's unlock and config-id, as upstream documents. The
   tools use it to take the rail under PMBus control for park and rescue; nothing else is written to the controller
   except through the firmware's own glitch command.
 
 ## Status
 
-The firmware patches rebuild the exact firmware the lab ran on its cards (the debug build is byte-identical; the
-normal build differs only in its embedded build date). The host tools are cleaned-up, generic versions of the
-bench scripts used for those cards; they pass the offline tests in `tests/`, and they had not yet run on a card in
-this exact form when published (2026-11-19). Reports welcome.
+- `firmware/0001-0003` rebuild the firmware the lab ran on its cards up to 2026-11-19 (the debug build is
+  byte-identical; the normal build differs only in its embedded build date). With `0004` the firmware is the timing
+  build the lab ran from 2026-11-20. `0005` is the classifier the lab's bench used from 2026-11-20.
+- `tools/runner/` and `tools/diag/` are the scripts the lab ran on its bench on 2026-11-19 and 20, with the bench's
+  hosts, addresses, paths and card table turned into settings, and the launcher's burn hand-off replaced by the
+  `ON_HOLD` hook. They pass the offline tests in `tests/`; they had not run in this exact form when published
+  (2026-11-20).
+- `tools/vfi_*.py` are cleaned-up, generic versions of earlier bench scripts. They pass the offline tests and had
+  not run on a card in this form when published (2026-11-19).
+- `experimental/` has not run on hardware.
 
-Run the tests with the ga100vfi host package on the path (needs pyserial):
+Reports welcome.
+
+## Tests
+
+The tool tests need the ga100vfi host package from a pico-ga100vfi clone with the patches applied (it imports
+pyserial):
 
 ```sh
 GA100VFI_HOST=/path/to/pico-ga100vfi/host python3 -I tests/test_tools.py
+python3 -I tests/test_runner.py
+GA100VFI_HOST=/path/to/pico-ga100vfi/host python3 -I experimental/runner/test_bisect_shots.py
+(cd /path/to/pico-ga100vfi/host && python3 -m unittest test_classify test_passive_snapshot test_serial_response)
 ```
 
 ## Upstream
@@ -188,7 +235,9 @@ changes are small enough to apply by hand.
 [kate-land](https://github.com/kate-land) for the GA100 voltage-glitch method and the original
 [ga100vfi](https://github.com/kate-land/ga100vfi) tooling; [dalzyu](https://github.com/dalzyu) for
 pico-ga100vfi, which these tools drive; [mellojello_](https://github.com/JosiahWhite) for proving the I2C and
-PEX_RST path; the members of the cmpunlocker Discord whose reports are credited on cmp.wiki.
+PEX_RST path; [sayhellotojungle/esp32-ga100vfi](https://github.com/sayhellotojungle/esp32-ga100vfi) for the note
+that a locked controller silently drops dip writes; the members of the cmpunlocker Discord whose reports are
+credited on cmp.wiki.
 
 ## License
 

@@ -2,6 +2,8 @@
 
 Not sent yet. To send it: fork dalzyu/pico-ga100vfi, apply `firmware/*.patch` with `git am` on a branch from
 `main` (they were made against `e1ebd97`), push the branch and open a pull request with the title and body below.
+The body covers patches 0001-0003; text for 0004 and 0005 (added 2026-11-20) is at the end, for the same pull
+request or a second one.
 
 ---
 
@@ -57,3 +59,27 @@ Same marker in the debug build's `v` line (`fw=lab-psr1-debug`).
   any access, would avoid reads and writes to the wrong device.
 
 Thanks for the tool.
+
+---
+
+**Patches 0004 and 0005 (2026-11-20)**
+
+**4. firmware: per-step timing telemetry; host: passive snapshot, full-line replies**
+
+Every step of the glitch timeline records the start and end of its call; after the shot the firmware prints one
+`timing ...` line per step (format in `docs/TIMING_DIAGNOSTIC.md`; nothing is printed inside the loop). It showed
+us that one PMBus write takes about 47 µs, not 36, and that the `PEX_RST` release waits for a `VOUT_COMMAND` write
+still running at t = 0: a single 36 µs pulse at td +81 released at +59 µs, at td +82 at +13 µs; the standard train
+at td -60 released on time. `Card.cmd(until=...)` now waits for the end of the `glitch done` line (a split USB
+packet made shots unparseable), and `host/passive_snapshot.py` is a read-only observer that stops at the first
+`0xBADF` read. The marker becomes `fw=lab-psr1-timing1`; drop that hunk if you prefer.
+
+**5. host: classify stops at a 0xBADF DSOV; the EN_SW_OVERRIDE write is opt-in**
+
+DSOV can read `0xBADFxxxx` behind a healthy FUSECTRL; classify now stops there too. Check 5 wrote 1 to
+`0x00820040` (EN_SW_OVERRIDE) after every shot, and on our bench that register kept its value across `PEX_RST`,
+so every later shot of a boot ran with the software override on. The write is now opt-in (`write=True` or
+`CLASSIFY_WRITE=1`); without it check 5 is left out of `Verdict.checks` and `campaign` still reports goldilocks
+on DSOV 0, FPF readable, PLM `0xffffffff` and CRC `0x55`. An A/B run on one card showed no edge change from the
+write. Also: a poisoned controller stayed poisoned until a power cycle on our cards, so the docstring no longer
+says the next `PEX_RST` clears it.

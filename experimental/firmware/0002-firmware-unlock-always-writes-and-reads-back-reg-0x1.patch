@@ -1,0 +1,72 @@
+From 9fead0a66194dcdd796f490b7569705d5dadb0f6 Mon Sep 17 00:00:00 2001
+From: darkmaniac7 <31073889+darkmaniac7@users.noreply.github.com>
+Date: Fri, 20 Nov 2026 01:24:02 -0600
+Subject: [PATCH 2/3] firmware: unlock always writes and reads back reg 0x13
+ and config ID 0x1229
+
+EXPERIMENTAL: built, not run on hardware.
+
+unlock_cmd returns early when CML already shows MATCH, so a controller
+that kept its unlock across a soft-off (the Pico stays powered over USB
+and the standby rail stays up) never got reg 0x13 = 0x00 or config ID
+0x46 = 0x1229. A new unlock_config() runs after unlock_cmd on every `u`:
+it writes both (they are idempotent), reads them back with CML and
+prints
+
+  unlock MATCH wp=00 cfg=1229
+
+(LOCKED or ERR in place of MATCH, ERR for a value that does not read,
+" write=ERR" if either write NACKs). unlock_cmd itself is unchanged, so
+its lines come first as before and hosts that look for "MATCH" in the
+reply keep working.
+
+Builds for pico2_w (RP2350A and RP2350B), normal and debug, with no
+warnings.
+---
+ docs/PROTOCOL.md  |  5 +++++
+ firmware/pwmvid.c | 21 ++++++++++++++++++++-
+ 2 files changed, 25 insertions(+), 1 deletion(-)
+
+diff --git a/docs/PROTOCOL.md b/docs/PROTOCOL.md
+index e0773ad..733b32d 100644
+--- a/docs/PROTOCOL.md
++++ b/docs/PROTOCOL.md
+@@ -96,2 +96,7 @@ is the captured-rail average and is **present only in the debug build**
+ 
++Every `u` then writes reg `0x13` = `0x00` and config ID `0x46` = `0x1229`, reads both
++back and prints `unlock <MATCH|LOCKED|ERR> wp=<hh|ERR> cfg=<hhhh|ERR>[ write=ERR]`
++(`unlock MATCH wp=00 cfg=1229` on a healthy controller). Before, both writes were
++skipped when the controller already reported MATCH.
++
+ ## PMBus over the bridge
+diff --git a/firmware/pwmvid.c b/firmware/pwmvid.c
+index aee1b41..2ea3621 100644
+--- a/firmware/pwmvid.c
++++ b/firmware/pwmvid.c
+@@ -291,2 +291,21 @@ static void unlock_cmd(void) {
+ 
++// Runs after unlock_cmd() on every `u`: write reg 0x13 = 0x00 and config ID
++// 0x46 = 0x1229 (stops GPU devinit re-locking the controller, docs/PROTOCOL.md)
++// and read both back. unlock_cmd() returns early when the controller already
++// reports MATCH (it can keep that across a soft-off) and then skipped both
++// writes. Both writes are idempotent.
++static void unlock_config(void) {
++    uint8_t cml = 0, wp = 0x00, cfg[2] = { 0, 0 };
++    bool wok = pmbus_w(0x13, &wp, 1);
++    wok &= pmbus_w16(0x46, 0x1229);
++    bool rwp = pmbus_r(0x13, &wp, 1);
++    bool rcfg = pmbus_r(0x46, cfg, 2);
++    bool rcml = pmbus_r(0x7E, &cml, 1);
++    printf("unlock %s wp=", !rcml ? "ERR" : (cml & 0x08) ? "MATCH" : "LOCKED");
++    if (rwp) printf("%02x", wp); else printf("ERR");
++    printf(" cfg=");
++    if (rcfg) printf("%02x%02x", cfg[1], cfg[0]); else printf("ERR");
++    printf("%s\n", wok ? "" : " write=ERR");
++}
++
+ static void lock_status_cmd(void) {
+@@ -766,3 +785,3 @@ int main(void) {
+         }
+-        else if (c == 'u') unlock_cmd();
++        else if (c == 'u') { unlock_cmd(); unlock_config(); }
+         else if (c == 'z') lock_status_cmd();

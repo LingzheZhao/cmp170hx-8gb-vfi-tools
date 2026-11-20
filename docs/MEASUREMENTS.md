@@ -26,8 +26,13 @@ around the release (t = 0) in a blocking loop: each step runs to its end before 
 A timing map whose shots put a write across t = 0 moves the release along with `t_dip`, so it does not measure what
 it seems to. On one card the lab had mapped a sharp edge between `t_dip` +81 µs (poisoned) and +82 µs (under) with
 single short dips; it sits where the table shows the release jumping from +59 µs to +13 µs. Check where each write of a shot falls before reading
-meaning into a timing edge. `experimental/firmware/0001` releases `PEX_RST` from a hardware alarm instead (not yet
-run on a card).
+meaning into a timing edge.
+
+**With the alarm release.** `firmware/0006` (push1) releases `PEX_RST` from a hardware alarm: on one card the releases
+then landed 1 to 4 µs after t = 0 for the shots in the table, but the first release of every boot came 9 to 10 µs
+late. `firmware/0009` (push2) runs the release handler from SRAM and primes the alarm before every shot: the first
+shot of three fresh boots released at 0, and push2 refuses any shot with a write in flight across t = 0 before it
+writes anything. The runner refuses to score a shot released outside 0 to 4 µs (MISTIMED).
 
 **Pulse widths below 36 µs are 36 µs.** The firmware raises any shorter width to one write time
 (`if (pw < PMBUS_W_US) pw = PMBUS_W_US` in `pwmvid.c`). Widths of 25, 27, 30 and 35 µs all send the same pulse, so
@@ -63,7 +68,7 @@ link on its second shot at 450 mV.
 reports MATCH (unlocked), and then skips register `0x13` = `0x00` (write protect) and the config ID `0x46` =
 `0x1229`. The Pico stays powered over USB and the standby rail stays up through a soft-off, so a boot can start with
 MATCH already set. On the boot the lab checked, both registers were set. Read them back each boot
-(`experimental/firmware/0002` does it in `u`).
+(`firmware/0007` does it in `u`; the runner stops unless it reads `unlock MATCH wp=00 cfg=1229`).
 
 **Split serial replies.** The host client stopped reading at the first `glitch done`, before the rest of that line
 had arrived. When a USB packet split the reply, the shot was logged as a NACK and went unclassified, without a park.
@@ -86,8 +91,10 @@ OFF") when bit 6 is set or READ_VOUT is below 500.
 
 On the card that latched at 381 mV with 198 µs pulses (two boots), shorter pulses did not latch: 3-pulse trains of
 120 µs at 388-375 mV, 100 µs at 375-369 mV and 80 µs at 362-356 mV (70 shots, `t_dip` -60 µs) all stayed under with
-the link alive and no latch. One card, one boot: a report, not a rule. Start a new card with shallow dips, step
-down, and watch STATUS_WORD and READ_VOUT after every shot.
+the link alive and no latch. A lower restore also helped: with `v_restore` 588 mV instead of 750 mV the 3 x 198 µs
+train at 381 mV did not latch (2 of 2), and the standard train then ran from 375 down to 331 mV (32 shots) with no
+latch; one first shot at 331 mV with delay 200 µs still latched (`METHOD.md`, section 4). One card: a report, not a
+rule. Start a new card with shallow dips, step down, and watch STATUS_WORD and READ_VOUT after every shot.
 
 ## Other bench notes
 
@@ -97,5 +104,8 @@ down, and watch STATUS_WORD and READ_VOUT after every shot.
   "under", a later read found fuse alias registers (`0x820324`, `0x820410`, per-GPC TPC and PES registers) at
   `0xBADF1020` / `0xBAD00100` while FUSECTRL, DSOV, CRC and the privilege mask looked normal. A repeat of that run
   with a check after every shot never tripped; the state appeared after the runs, not on a shot, and its cause is not
-  known. The runner reads one alias (`SENTINEL`, default `0x820410`) after every "under" shot and stops on a
-  `0xBAD.....` value, as a cheap guard.
+  known. The runner reads one alias (`SENTINEL`, default `0x820410`) after every clean read and stops unless it
+  equals the boot's baseline, as a cheap guard.
+- **Rare fuse-unit errors.** On one card FUSECTRL read `0xBAD00100` on about 1 to 2 % of shots at large delays (300 to
+  400 µs), once still 3 s later; exact repeats were under. The runner stops at a `0xBAD0` read like at `0xBADF`
+  (`firmware/0010` gives `passive_snapshot.py` the same rule).

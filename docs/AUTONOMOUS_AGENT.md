@@ -4,7 +4,8 @@ The lab runs its glitch campaigns through an LLM agent. The owner gives the agen
 host and a shell on it; the agent runs the tests itself, one boot per run, and writes up each run in a journal. The
 scripts in `tools/runner/` are the ones it drives. This page mirrors the
 [section on cmp.wiki](https://cmp.wiki/wiki/Voltage-glitch_unlock:_lab_method_on_a_Pico_2_W#Running_the_bench_autonomously_with_an_LLM_agent)
-and maps each step to the code here.
+and maps each step to the code here. `tools/planner/hunt.py` can also run the plan, run, ingest loop by itself
+(section "The hunter loop" below).
 
 ## What the agent controls
 
@@ -24,19 +25,40 @@ and maps each step to the code here.
 4. **Preflight and identity**: the I2C preflight must pass, and the card's fuse identity (GPC disable mask, current
    SM count and SM ceiling) must match the card the run was set up for. A mismatch stops the run.
 5. **Temperature gate**: wait until the voltage controller's temperature reaches the run's minimum, up to a time cap
-   (`TMIN`, `TCAP`).
+   (`TMIN`, `TCAP`); if it does not, no shot is fired.
 6. **The per-boot runner** (`bisect_shots.py`) fires the planned settings, many back-to-back shots per setting
    ("cells"), with a cap on shots per boot and a time limit per run. Every shot is logged with its parameters and
    its outcome.
-7. **After every shot**: the firmware's reply (`pwd=1`, `e1=0xc2fa`, or the shot did not run), the controller's
-   STATUS_WORD and READ_VOUT, then FUSECTRL first and the classifier. A lost shot gets a park. Partial states are
-   counted and never sensed.
-8. **Stops**: a poisoned shot, the controller-off latch, a shot that did not run, a failed park, a run of lost
-   shots, or any outcome the runner does not recognise ends the run. The next run starts with a power cycle.
+7. **After every shot**: the firmware's reply (`pwd=1`, `e1=0xc2fa`, or the shot did not run), the release timing
+   (0 to 4 µs by the alarm, or the shot is not scored), the controller's STATUS_WORD and READ_VOUT, then a passive
+   read with FUSECTRL first, CRC included, and the sentinel alias. A lost shot gets a park. A partial state is held
+   and never sensed.
+8. **Stops**: a poisoned shot, the controller-off latch, a shot that did not run, a mistimed shot, a failed park, a
+   run of lost shots, or any outcome the runner does not recognise ends the run. The next run starts with a power
+   cycle.
 9. **Goldilocks**: the runner holds the state (no park). In this repository `bootrun.sh` then runs the `ON_HOLD`
    command if you set one, and otherwise stops and reports. In the lab the hold went to a separately reviewed burn
    script, and only for a card whose planned rows the owner had already approved; that script checked again before
    it wrote anything. No burn tooling is published here. Only a cold boot and a new read verify a burn.
+
+## The hunter loop (`tools/planner/`)
+
+The lab's agent first ran hand-written queues of launcher calls. `tools/planner/` holds the loop it grew into, with
+no agent needed:
+
+1. **Plan**: read the card's ledger (one record per shot, append-only) and propose the next shots for the chosen
+   search family, under the never-rules: the card's floor, the runner's limits, no write across the release, and a
+   latch rule learned from every controller-off shot.
+2. **Launch**: one `firstshot.sh` run (a fresh boot per shot) or one `bootrun.sh` boot with `PARK_EACH=1`.
+3. **Ingest**: parse the launcher's full log into the ledger.
+4. **Stop rules**, per boot: a held goldilocks, a shot that did not run, identity, checksum, preflight, fresh-boot or
+   transfer failures, a Python error, a second controller latch, park failures or mistimed shots in two boots in a
+   row, three temperature gate failures, or an exit it does not recognise. Otherwise plan again, until the budget
+   (`--max-boots`, `--max-hours`) runs out.
+
+`hunt.py` is a dry run unless given `--execute`, logs every decision to `decisions.jsonl`, and runs nothing but the
+launchers. The search methods and the ledger format are in `tools/planner/README.md`; the method behind them is in
+`docs/METHOD.md`.
 
 ## What stays with people
 
@@ -52,7 +74,7 @@ settings can be compared on equal terms.
 ## The guard rails that matter most
 
 - No secondary bus reset and no `setpci` link retrain during a campaign (`RETRAIN` and `SBR` are off by default).
-- FUSECTRL first after every shot; stop on `0xBADF`.
+- FUSECTRL first after every shot; stop on `0xBADF` and `0xBAD0`.
 - Never run a fuse sense on a state whose privilege mask reads `0xFFFFFEFE`.
 - No NVVDD probe lead attached while glitching; verification shots only.
 - Check that every shot really ran (`pwd=1`, `e1=0xc2fa`).

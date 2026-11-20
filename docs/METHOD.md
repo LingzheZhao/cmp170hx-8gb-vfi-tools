@@ -51,6 +51,9 @@ A gentler recovery (stock slew, or a smaller step back up) bought one VID step. 
 (section 7). The lab's reading: a fast, large recovery step disturbs the GPU's PCIe training. The planner's default
 family for this card uses the stock slew (`e-slow-push2`); `e-vr625-push2` uses restore 625 mV.
 
+The direction is card-specific. On another card, with the earlier firmware, 306 mV kept the link with a restore of 800
+to 825 mV and lost it at 775 mV. Try the restore in both directions at a card's edge.
+
 ## 4. Restore 588 mV against the controller latch
 
 The MP2888B can switch its output off (STATUS_WORD `0x2042`, READ_VOUT about 41 mV) until a power cycle. On card E

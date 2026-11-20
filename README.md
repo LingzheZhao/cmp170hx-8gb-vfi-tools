@@ -177,8 +177,9 @@ privilege mask stuck at `0xFFFFFEFE`; a sense on one of them poisoned the contro
   train. Hits reported by others sat at delays of 330 to 360 µs; the lab had used 117 µs throughout until
   2026-11-20 (`docs/METHOD.md`, section 5).
 - **Recovery and the PCIe link.** On one card a gentler recovery after the dip (stock slew, or restore 625 mV
-  instead of 750 mV) kept the link one VID step deeper. Below about 325 mV commanded that card's GPU dropped off
-  the bus in every form tried, a dip entirely before the release included.
+  instead of 750 mV) kept the link one VID step deeper; on another card a higher restore (800 to 825 mV) did, so try
+  both directions. Below about 325 mV commanded the first card's GPU dropped off the bus in every form tried, a dip
+  entirely before the release included.
 - **Cards differ.** Commanded depth at the hit ranged from 300 to 356 mV across sessions and cards. One card never
   reached goldilocks in about 4,000 shots: it went from under straight to a crash at every depth and timing tried,
   with the fuse read and the lethal event inside the same few microseconds. Details on the results page.

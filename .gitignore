@@ -6,3 +6,6 @@ vfi-snaps/
 *.jsonl
 traces*.json
 goldilocks.jsonl
+# bench settings name your hosts: never commit
+tools/runner/bench.conf
+bootrun-*.last

@@ -1,0 +1,113 @@
+#!/bin/bash
+# bootrun.sh <card> '<SEQ json>': one run of bisect_shots.py on a freshly booted bench host, one data point per boot.
+# Runs on a controller machine that reaches the bench host over ssh (key auth). Settings: bench.conf next to this
+# file (copy bench.conf.example), or BENCH_CONF=<file>. <card> selects the function card_<card> in that file.
+#
+# power cycle (Wake-on-LAN or IPMI) -> fresh-boot guard -> plan checksum (when the card names plan files) -> copy the
+# runner to the bench -> host guard -> I2C preflight -> card identity -> temperature gate -> bisect_shots.py (stops at
+# the first shot that is not "under") -> on ">>> GOLDILOCKS HELD": run ON_HOLD if set, else stop and report the held
+# state. Nothing here burns fuses.
+#
+# env: NOCYCLE=1 (use the current boot), FLOOR (mV), TMIN (raw READ_TEMP1), TCAP (s), OFFWAIT (s), POWER (wol|ipmi),
+#      RUNTO (s, run time limit), RUNNER (runner file to copy; default bisect_shots.py here), and for the runner:
+#      TRACE, PARK_EACH, REPEAT, SHOTCAP, LOSTRUN, RESTORE_WAIT, CELLLOST, CLASSIFY_WRITE, SENTINEL
+# Exit codes: 0 a hold was seen, 1 bench never came up, 2 usage or config, 3 copy, host guard or preflight failed,
+# 4 plan checksum mismatch, 5 identity mismatch, 6 not a fresh boot, 7 bench did not power off; otherwise the
+# runner's own exit code (0 sequence done, 9 controller off, 10 tipped, 12 no dip; see bisect_shots.py), 124 when
+# RUNTO cut the run. The last line is always "RESULT: ..." or the hold report.
+set -u
+HERE=$(cd "$(dirname "$0")" && pwd); TOOLS=$(dirname "$HERE")
+CONF=${BENCH_CONF:-$HERE/bench.conf}
+[ -f "$CONF" ] || { echo "no $CONF: copy bench.conf.example to bench.conf and fill it in"; exit 2; }
+# shellcheck source=/dev/null
+. "$CONF"
+. "$HERE/power.sh"
+: "${BENCH_SSH:?set BENCH_SSH in $CONF}" "${BENCH_DIR:?set BENCH_DIR in $CONF}" "${BENCH_PY:?set BENCH_PY in $CONF}"
+[ $# -eq 2 ] || { echo "usage: $0 <card> '<SEQ json>'"; exit 2; }
+CARD=$1; SEQ=$2
+TAG=""; GPC=""; SMC=""; CARD_BDF=""; PLAN_LOCAL=""; PLAN_REMOTE=""; PLAN_FILES=""
+declare -F "card_$CARD" >/dev/null || { echo "unknown card '$CARD': define card_$CARD in $CONF"; exit 2; }
+"card_$CARD"
+[ -n "$TAG" ] && [ -n "$GPC" ] && [ -n "$SMC" ] || { echo "card_$CARD must set TAG, GPC and SMC"; exit 2; }
+RUNNER=${RUNNER:-$HERE/bisect_shots.py}
+TRACE=${TRACE:-0}; PARK_EACH=${PARK_EACH:-0}; FLOOR=${FLOOR:-338}; TMIN=${TMIN:-375}; TCAP=${TCAP:-300}
+PORT=${PICO_PORT:-/dev/ttyACM0}; H=$BENCH_SSH
+
+if [ "${NOCYCLE:-0}" != 1 ]; then
+  power_cycle || exit $?
+fi
+u=$(bench_uptime); echo "bench up ${u:-?}s"; [ "${u:-99999}" -lt "${FRESH_MAX:-900}" ] || { echo "NOT A FRESH BOOT: stop"; exit 6; }
+if [ -n "$PLAN_FILES" ]; then
+  # shellcheck disable=SC2086
+  a=$(cd "$PLAN_LOCAL" && sha256sum $PLAN_FILES | cut -c1-64 | tr '\n' ' ')
+  b=$(ssh "$H" "cd $(printf %q "$PLAN_REMOTE") && sha256sum $PLAN_FILES | cut -c1-64 | tr '\n' ' '")
+  [ -n "$a" ] && [ "$a" = "$b" ] && echo "PLAN SHA MATCH ($CARD)" || { echo "PLAN SHA MISMATCH: stop"; exit 4; }
+fi
+ssh "$H" "mkdir -p $(printf %q "$BENCH_DIR")" && scp -q "$RUNNER" "$H:$BENCH_DIR/bisect_shots.py" \
+  && scp -q "$HERE/park.py" "$HERE/preflight.py" "$TOOLS/vfi_snap.py" "$TOOLS/vfi_common.py" "$H:$BENCH_DIR/" \
+  || { echo "copy to the bench failed: stop"; exit 3; }
+mkdir -p "${LOG_DIR:-.}"; L=${LOG_DIR:-.}/bootrun-$CARD.last
+XENV="REPEAT=${REPEAT:-1} SHOTCAP=${SHOTCAP:-450} LOSTRUN=${LOSTRUN:-8} RESTORE_WAIT=${RESTORE_WAIT:-8.0} CELLLOST=${CELLLOST:-0} CLASSIFY_WRITE=${CLASSIFY_WRITE:-0} SENTINEL=${SENTINEL:-0x820410}"
+ssh "$H" "bash -s -- $(printf '%q ' "$TAG" "$SEQ" "$GPC" "$SMC" "$FLOOR" "$TMIN" "$TCAP" "$TRACE" "$PARK_EACH" "$XENV" "${RUNTO:-900}" "$BENCH_DIR" "$BENCH_PY" "${BENCH_TASKSET:-}" "$PORT" "$CARD_BDF" "${GLITCH_CMDLINE:-}" "${MASK_PCIEHP:-0}")" <<'R' | tee "$L"
+TAG=$1; SEQ=$2; GPC=$3; SMC=$4; FLOOR=$5; TMIN=$6; TCAP=$7; TRACE=$8; PARK_EACH=$9; XENV=${10}; RUNTO=${11}
+D=${12}; PY=${13}; TS=${14}; PORT=${15}; BDF=${16}; CMDW=${17}; MASK=${18}
+PYV="$TS $PY"
+stop(){ echo "$1: stop"; exit "$2"; }
+cd /tmp || exit 3
+# host guard: the glitch boot, no NVIDIA driver, no lockdown, one card on pci-stub (or none), the Pico, decode on, GFW done
+[ -z "$CMDW" ] || grep -qw -- "$CMDW" /proc/cmdline || stop "HOST GUARD: '$CMDW' is not on the kernel command line (not the glitch boot)" 3
+lsmod | grep -q '^nvidia ' && stop "HOST GUARD: the nvidia module is loaded" 3
+[ ! -e /sys/kernel/security/lockdown ] || grep -q '\[none\]' /sys/kernel/security/lockdown || stop "HOST GUARD: kernel lockdown is on (Secure Boot?)" 3
+if [ -z "$BDF" ]; then
+  mapfile -t B < <(lspci -Dn -d 10de:20c2 | awk '{print $1}')
+  [ ${#B[@]} -eq 1 ] || stop "HOST GUARD: expected exactly one 10de:20c2 card, found ${#B[@]}" 3
+  BDF=${B[0]}
+fi
+[ -e "/sys/bus/pci/devices/$BDF" ] || stop "HOST GUARD: no PCI device $BDF" 3
+DRV=$(basename "$(readlink "/sys/bus/pci/devices/$BDF/driver" 2>/dev/null)" 2>/dev/null)
+[ -z "$DRV" ] || [ "$DRV" = pci-stub ] || stop "HOST GUARD: driver $DRV is bound to $BDF (only pci-stub is allowed)" 3
+[ -e "$PORT" ] || stop "HOST GUARD: no Pico serial port at $PORT" 3
+[ $(( 0x$(setpci -s "$BDF" COMMAND) & 2 )) -eq 0 ] && { setpci -s "$BDF" COMMAND=0x0002; echo "memory decode was off on $BDF: turned on"; }
+GFW=$(python3 -I - "$BDF" <<'P'
+import mmap, os, sys
+p = f"/sys/bus/pci/devices/{sys.argv[1]}"
+cfg = open(p + "/config", "rb").read(8)
+if cfg[:4] == b"\xff\xff\xff\xff": print("LINKDOWN"); sys.exit()
+if not (cfg[4] & 2): print("NODECODE"); sys.exit()
+fd = os.open(p + "/resource0", os.O_RDONLY | os.O_SYNC); m = mmap.mmap(fd, 0x200000, mmap.MAP_SHARED, mmap.PROT_READ); os.close(fd)
+print(hex(memoryview(m).cast("I")[0x118234 // 4] & 0xff))
+P
+)
+case "$GFW" in 0x1) stop "HOST GUARD: GFW boot progress reads 0x01 (still booting)" 3;; LINKDOWN|NODECODE|"") stop "HOST GUARD: config space says $GFW" 3;; esac
+echo "card $BDF gfw=$GFW pico=$PORT"
+CRP=$(basename "$(dirname "$(readlink -f "/sys/bus/pci/devices/$BDF")")")
+if [ "$MASK" = 1 ] && lspci -s "$CRP" -vv 2>/dev/null | grep -q "HotPlug+"; then setpci -s "$CRP" CAP_EXP+18.w=0000:1028; echo "pciehp interrupts masked on $CRP (SltCtl=$(setpci -s "$CRP" CAP_EXP+18.w))"; fi
+temp(){ $PYV -I -c "import sys
+from ga100vfi.glitch import Card
+c = Card(sys.argv[1]); d = c.read(0x25, 0x8D, 2); print(d[0] | d[1] << 8); c.close()" "$PORT" 2>/dev/null; }
+timeout 60 $PYV -I "$D/preflight.py" "$PORT" > /tmp/vfi-pf.out 2>&1; grep -E "PREFLIGHT|pico v" /tmp/vfi-pf.out
+grep -q "PREFLIGHT OK" /tmp/vfi-pf.out || { echo "PREFLIGHT FAILED: stop"; tail -4 /tmp/vfi-pf.out; exit 3; }
+timeout 60 $PYV -E -s "$D/vfi_snap.py" --bdf "$BDF" --port "$PORT" --label preflight --outdir "$D/snaps" > /tmp/vfi-snap.out 2>&1
+grep -E "verdict|GPC dis" /tmp/vfi-snap.out
+grep -q "GPC dis/def/st=$GPC/" /tmp/vfi-snap.out && grep -q "$SMC" /tmp/vfi-snap.out && echo "IDENTITY OK: $TAG" || { echo "IDENTITY MISMATCH: stop"; exit 5; }
+t0=$(date +%s); while [ $(( $(date +%s) - t0 )) -lt "$TCAP" ]; do v=$(temp); [ -n "$v" ] && [ "$v" -ge "$TMIN" ] && break; sleep 15; done
+echo "START temp_raw=$(temp) $(date +%H:%M:%S)"
+echo "run env: $XENV timeout ${RUNTO}s"
+# shellcheck disable=SC2086
+env $XENV VFI_BDF="$BDF" VFI_PORT="$PORT" VFI_TRACE_DIR="$D" FLOOR="$FLOOR" TRACE="$TRACE" PARK_EACH="$PARK_EACH" timeout "$RUNTO" $PYV -I "$D/bisect_shots.py" "$TAG" "$SEQ"
+rc=$?
+echo "end temp_raw=$(temp)"
+exit $rc
+R
+rc=${PIPESTATUS[0]}
+if grep -q ">>> GOLDILOCKS HELD" "$L"; then
+  echo "HOLD SEEN $(date +%H:%M:%S): $TAG is held in the goldilocks state (rail under PMBus control, not parked)"
+  if [ -n "${ON_HOLD:-}" ]; then
+    CARD=$CARD TAG=$TAG BENCH_SSH=$BENCH_SSH BENCH_DIR=$BENCH_DIR RUN_LOG=$L bash -c "$ON_HOLD"; echo "ON_HOLD rc=$?"
+  else
+    echo "No ON_HOLD hook set: stopping here. Read the held state on the bench (vfi_snap.py in $BENCH_DIR), then park (park.py) or power-cycle."
+  fi
+  exit 0
+fi
+r=$(grep -E "TIPPED|sequence exhausted|CONTROLLER OFF|NO DIP|STOP|FAILED|MISMATCH|HOST GUARD" "$L" | head -1); echo "RESULT: ${r:-see log}"
+exit "$rc"

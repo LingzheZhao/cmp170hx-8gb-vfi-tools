@@ -3,14 +3,18 @@
 Bench tools and firmware fixes for the Pico voltage-glitch ("goldilocks") method on NVIDIA CMP 170HX 8 GB cards
 (`10de:20c2`), built on [dalzyu/pico-ga100vfi](https://github.com/dalzyu/pico-ga100vfi).
 
-With this glitch setup, and a separate burn step that is not part of this repository, the lab finished five
+With this glitch setup, and a separate burn step that is not part of this repository, the lab finished six
 8 GB cards in November 2026: compute from 70 to 122, 122, 120, 118 and 108 SMs (126, 126, 124, 122 and 112 with the
-RECONFIG override), the 80 GB memory layout, and PCIe fuses that advertise 2.5 to 16 GT/s, all read back after a cold
-boot. The last two, cards G and H, were finished on 2026-11-20 by two different routes: card G with the community
+RECONFIG override) and, on 2026-11-21, card E from 70 to 106 (ceiling 110), the 80 GB memory layout, and PCIe fuses
+that advertise 2.5 to 16 GT/s, all read back after a cold boot. The last two, cards G and H, were finished on 2026-11-20 by two different routes: card G with the community
 pulse train, card H, where that train did not work, by mapping where the glitch lands in the GPU's boot and then
 slowing the rail's fall. [`docs/SWEET_SPOT.md`](docs/SWEET_SPOT.md) turns both into one strategy, and
 [`tools/hunter/goldilocks_hunt.py`](tools/hunter/goldilocks_hunt.py) plans, runs and reads it back for a person or
-an LLM agent. The method, wiring, parts and results are on cmp.wiki:
+an LLM agent. Card E, which went from under straight to link loss or a skipped fuse check on every one of those
+shapes, needed one more thing: firmware that lets a PMBus write run across the reset release (push3,
+[`docs/PUSH3.md`](docs/PUSH3.md)), so the rail can still be low at the release and come back up a few µs after it
+([`docs/OVERLAP_EDGE.md`](docs/OVERLAP_EDGE.md)). [`cimp`](docs/CIMP.md) puts the configuration, a live status panel
+and the hunter behind one command. The method, wiring, parts and results are on cmp.wiki:
 
 - [Voltage-glitch unlock: lab method on a Pico 2 W](https://cmp.wiki/wiki/Voltage-glitch_unlock:_lab_method_on_a_Pico_2_W)
 - [Voltage-glitch unlock: lab results and fuse findings](https://cmp.wiki/wiki/Voltage-glitch_unlock:_lab_results_and_fuse_findings)
@@ -25,10 +29,12 @@ an LLM agent. The method, wiring, parts and results are on cmp.wiki:
 
 | Path | What |
 |---|---|
-| `firmware/` | Ten patches against pico-ga100vfi (`git am`-ready), with a README. The current firmware is push2 (`fw=lab-psr1-push2`): `PEX_RST` released by a primed hardware alarm from SRAM, on time from the first shot of a boot, and a timeline that fails closed (no write across the release, card kept in reset on a failed step). Also: each card's own VRM profile restored after every shot, a classifier that stops at a poisoned fuse controller and no longer writes EN_SW_OVERRIDE unless asked, an unlock that always writes and reads back the config registers, lab knobs, per-step timing telemetry, a passive BAR0 snapshot, and serial replies read to the end of the line |
-| `tools/hunter/goldilocks_hunt.py` | The goldilocks hunter: plans each phase of `docs/SWEET_SPOT.md` (community train ladder, fuse-read window map, init-phase release-edge scan, slow-slew edge scan, dwell) with every step checked against push2's release rule, drives `bootrun.sh` through a plan (dry run unless `--execute`, stops on poison, latch, holds and unknown outcomes), and tallies runner logs per cell (counts, GFW/DSOV/CRC/mask/sentinel codes, edges, partial CRC codes, the first shot of each boot left out) into the next phase. Never senses or burns; standard library only |
+| `firmware/` | Eleven patches against pico-ga100vfi (`git am`-ready), with a README. The current firmware is push3 (`fw=lab-psr1-push3`, `0011`): push2 plus one change, a PMBus write may run across the reset release (`docs/PUSH3.md`). push2 (`0009`): `PEX_RST` released by a primed hardware alarm from SRAM, on time from the first shot of a boot, and a timeline that fails closed (card kept in reset on a failed step). Also: each card's own VRM profile restored after every shot, a classifier that stops at a poisoned fuse controller and no longer writes EN_SW_OVERRIDE unless asked, an unlock that always writes and reads back the config registers, lab knobs, per-step timing telemetry, a passive BAR0 snapshot, and serial replies read to the end of the line |
+| `cimp`, `tools/cimp/cimp.py` | CiMP, one command for the bench: an interactive configurator with profiles, `--test` checks and generated `bench.conf`/ssh settings (`config`), a live read-only status panel with plain-word phases, temperature, fan cues and every shot's outcome (`watch`), the hunter wired to the profile (`hunt`), and the outcome ladder (`ladder`, `classify`); see `docs/CIMP.md` |
+| `tools/hunter/goldilocks_hunt.py` | The goldilocks hunter: plans each phase of `docs/SWEET_SPOT.md` (community train ladder, fuse-read window map, init-phase release-edge scan, slow-slew edge scan, dwell, and the push3 overlap edge) with every step checked against push2's release rule (or push3's, for plans that opt in), drives `bootrun.sh` through a plan (dry run unless `--execute`, stops on poison, latch, holds and unknown outcomes), and tallies runner logs per cell (counts, GFW/DSOV/CRC/mask/sentinel codes, edges, partial CRC codes, the first shot of each boot left out) into the next phase. Never senses or burns; standard library only |
 | `tools/runner/` | The push2 per-boot runner (`bisect_shots.py`), park and preflight, and the launchers: `bootrun.sh` (power cycle, fresh-boot guard, plan checksum, host guard, preflight, identity, temperature gate, runner, hold hook), `firstshot.sh` (one fresh boot per step) and `campaign.sh` (a ladder across boots), as the lab ran them; see `docs/RUNNER.md`. Since 2026-11-21 the runner also has the lab's behaviour from cards G and H: read-only stall reads, compass frames, no parks with a 100 ms `PEX_RST` recovery and a healthy-read gate, opt-in shooting through stalls and partials, the sentinel rule for DSOV 0, and a machine-readable line per shot |
 | `tools/planner/` | The planner and hunter: an append-only shot ledger, a log parser, a next-shot planner (loss island, delay sweep, CRC compass, drift loop) under never-rules, and `hunt.py`, which runs plan, launch, ingest in a loop with stop rules (dry run unless `--execute`). Example card and family files, an empty ledger and a small synthetic sample; see `tools/planner/README.md` |
+| `tools/hostsim/` | Host simulation of the firmware's shot timeline: compares push2 and push3 shot by shot (`run.sh`, 90 checks) |
 | `tools/diag/` | Two gentle 700 mV checks: where the `PEX_RST` release lands per kind of shot (`timing_controls.py`), and whether EN_SW_OVERRIDE survives `PEX_RST` (`enswtest.py`) |
 | `tools/vfi_preflight.py` | Read-only checks before a session: firmware marker, who controls the rail, the card's six VRM profile registers (stops on a leftover fast value), host lockdown, driver, config space, FUSECTRL, GFW boot progress |
 | `tools/vfi_park.py` | Hold NVVDD at stock under PMBus, pulse PEX_RST, wait, read config space, hand the rail back |
@@ -39,6 +45,9 @@ an LLM agent. The method, wiring, parts and results are on cmp.wiki:
 | `tools/vfi_edge.py` | Edge tracker: walks the train timing along a card's lethal edge in short cells, with a crash budget |
 | `tools/vfi_common.py` | Shared code: park, poison-safe classify, bounds, the no-dip check, per-boot shot ledger |
 | `tests/` | Offline tests against a simulated Pico, voltage controller and card, a fake `ga100vfi` package for the runner, and fake `ssh`/`scp`/power tools for the launchers |
+| `docs/OVERLAP_EDGE.md` | What finished card E: the map of the release-edge window push3 opened, the shot, and how to scan it on another card |
+| `docs/PUSH3.md` | The push3 firmware change: what changed, why it is safe, how it was checked, how to flash it and the BOOTSEL trap |
+| `docs/CIMP.md` | CiMP: commands, every setting, profiles, environment variables, ssh keys and passwords, the watch panel |
 | `docs/SWEET_SPOT.md` | The strategy that finished cards G and H, in order, with both cards as worked examples and their data: the community train, the fuse-read map, the init phase, the slow slew, the hold |
 | `docs/METHOD.md` | How the lab searches now, and why: on-time release first, park-normalized shots, slow slew and a lower restore against link loss, restore 588 mV against the controller latch, delay as a knob and the 47 µs rule, CRC as a compass, what one card showed, the search order that worked best |
 | `docs/MEASUREMENTS.md` | What the bench measured: write time, release slip, the 36 µs width floor, EN_SW_OVERRIDE, sticky poison, the controller-off latch |
@@ -257,6 +266,13 @@ privilege mask stuck at `0xFFFFFEFE`; a sense on one of them poisoned the contro
 - `tools/hunter/` and the runner's additions of 2026-11-21 follow the lab's runner and its strategy for cards G and H
   (2026-11-20). They pass the offline tests, and the tally reproduces both cards' maps from the lab's logs; they had
   not run on a card in this form when published (2026-11-21).
+- `firmware/0011` is push3 as the lab ran it on card E on 2026-11-21 (13 shots, 10 of them overlap shots, every release at t = 0 by the
+  alarm, the goldilocks on the 13th), applied to this series; it builds with no warnings and passes the host
+  simulation (90 of 90). The lab's image was built from its own push2 tree, so checksums differ (as for `0006-0010`).
+- `cimp` and the runner and launcher additions of 2026-11-21 (the `tv` step field, `SENT0_CONTINUE`, per-poll gate
+  lines and `TSTART`, `POWER=manual`) are new: `cimp watch` was checked against the lab's real logs, including card
+  E's winning run, and everything passes the offline tests; the configurator, `hunt run` and the launcher additions
+  had not driven a bench in this form when published (2026-11-21).
 - `tools/vfi_*.py` are cleaned-up, generic versions of earlier bench scripts. They pass the offline tests and had
   not run on a card in this form when published (2026-11-19).
 
@@ -272,6 +288,8 @@ GA100VFI_HOST=/path/to/pico-ga100vfi/host python3 -I tests/test_tools.py
 GA100VFI_HOST=/path/to/pico-ga100vfi/host python3 -I tests/test_runner.py
 python3 -I tests/test_launchers.py
 python3 -I tests/test_hunter.py
+python3 -I tests/test_cimp.py
+tools/hostsim/run.sh /path/to/pico-ga100vfi HEAD~1        # with 0001-0011 applied: push2 against push3
 (cd tools/planner/tests && python3 -I -m unittest discover -s . -t .)
 (cd /path/to/pico-ga100vfi/host && python3 -m unittest test_classify test_passive_snapshot test_serial_response)
 ```

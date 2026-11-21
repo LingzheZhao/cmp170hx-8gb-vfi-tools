@@ -50,7 +50,11 @@ CRC_STATUS is four 2-bit fields, one per fuse block, and `01` means the block pa
 5. **The slow slew.** At the code where s1 near -47 reads under and a few µs earlier is poison (card H: 375 mV),
    switch to the stock slew (fast 0) and step s1 from -47 to -100: the rail is still falling at the release, which
    lands between the codes. `goldilocks_hunt.py slow --v 375`
-6. **Hold.** Hold any goldilocks frame for the active sense and the window check. Only a cold boot verifies a burn.
+6. **The overlap edge (push3).** If the card goes from under straight to link loss, CRC44 (DSOV 0, blocks 0 and 2
+   skipped) or "over" on every shape above, flash push3 and scan one long dip whose restore write is in flight
+   across the release, so the rail is still low at t = 0 and back up 0 to 17 µs after it. Card E: the goldilocks on
+   the 13th shot, rail back up 7 µs after the release. `goldilocks_hunt.py overlap` ([`OVERLAP_EDGE.md`](OVERLAP_EDGE.md))
+7. **Hold.** Hold any goldilocks frame for the active sense and the window check. Only a cold boot verifies a burn.
 
 After every phase, `goldilocks_hunt.py tally <logs>` prints the map (counts per cell, the register codes, the edges
 and the partial codes) and a "Next" block with the command for the next phase. The first shot of every boot is left
@@ -205,7 +209,12 @@ python3 $H run plan-train.json --card g           # dry run: prints the boots it
 python3 $H run plan-train.json --card g --execute --log-dir logs/g-train
 python3 $H tally logs/g-train                     # the map and the next phase
 python3 $H check '[[375,62,1,198,750,0,2,0,-20,0,117,150]]' -v     # any step against push2's release rule
+python3 $H overlap --out plan-overlap.json        # phase 6, push3 only: plans carry "allow_overlap": true
+python3 $H check --allow-overlap '[[381,-60,1,137,625,1,1,0,-20,0,117,150,171]]'   # card E's shot, push3 rule
 ```
+
+`./cimp hunt ...` runs the same commands with the bench settings of a CiMP profile, and `./cimp watch` shows the run
+live ([`CIMP.md`](CIMP.md)).
 
 Every step the hunter emits passes the push2 legality model (`tools/planner/planner_auto/schedule.py`, a port of the
 firmware's timeline: 47 µs per PMBus write, writes queued, no write that starts at or before the release and is

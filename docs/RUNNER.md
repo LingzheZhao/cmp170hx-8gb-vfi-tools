@@ -3,7 +3,7 @@
 `tools/runner/` holds the scripts the lab ran its glitch campaigns with, one boot at a time, cleaned of bench-specific
 names: the card's address, the serial port, the hosts and the power control are settings now. The logic is the
 lab's, except that the launcher's last step (handing a held goldilocks to a burn script) is replaced by an optional
-hook. Nothing here burns fuses. The current runner is the push2 runner: it needs push1 or push2 firmware
+hook. Nothing here burns fuses. The current runner is the push2 runner: it needs push1, push2 or push3 firmware
 (`firmware/0001-0009`, marker `fw=lab-psr1-push1` or `fw=lab-psr1-push2`) and is meant for push2.
 
 | File | Runs on | What |
@@ -72,7 +72,7 @@ written (`docs/METHOD.md`, section 5). Order the steps from the weakest effect t
 - **Park-normalized** (`PARK_EACH=1`): a park before every shot after the first, so each shot starts like the first
   shot of a boot and many comparable shots fit in one boot (`docs/METHOD.md`, section 2).
 
-Once per boot, before the first shot: the firmware marker (push1 or push2, or stop), `u` with its readback (exactly
+Once per boot, before the first shot: the firmware marker (push1, push2 or push3, or stop), `u` with its readback (exactly
 `unlock MATCH wp=00 cfg=1229`, or stop), a read of controller registers `0x13 0x46 0x7E 0x79 0x88 0x8B 0x8D`, the
 controller's health (STATUS_WORD OFF bit clear, READ_VOUT 500 to 850 mV) and a passive BAR0 baseline, which must read
 healthy. The `SENTINEL` alias register's baseline value is kept for the boot; `SENTINEL_EXPECT` pins it.

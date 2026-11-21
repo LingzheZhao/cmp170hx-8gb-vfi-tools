@@ -12,7 +12,7 @@ and H (section "The goldilocks hunter").
 
 - **Power**: Wake-on-LAN to switch the bench on and an OS poweroff to switch it off. On a board with a BMC, IPMI does
   both and confirms that the host is really off, with a hard power-off if a clean shutdown stalls (`power.sh`,
-  `POWER=wol` or `ipmi`).
+  `POWER=wol` or `ipmi`). `POWER=manual` waits for a person to press the button instead.
 - **A shell on the bench host**, with the glitch tools, the Pico's serial console and the card's BAR0.
 
 ## One run, one boot (`tools/runner/bootrun.sh`)
@@ -25,8 +25,9 @@ and H (section "The goldilocks hunter").
    fuse dump it was built from) must match the reviewed copies by checksum (`PLAN_FILES`).
 4. **Preflight and identity**: the I2C preflight must pass, and the card's fuse identity (GPC disable mask, current
    SM count and SM ceiling) must match the card the run was set up for. A mismatch stops the run.
-5. **Temperature gate**: wait until the voltage controller's temperature reaches the run's minimum, up to a time cap
-   (`TMIN`, `TCAP`); if it does not, no shot is fired.
+5. **Temperature gate**: wait until the voltage controller's temperature reaches the run's minimum, and with
+   `TSTART` set stays at or below that, up to a time cap (`TMIN`, `TSTART`, `TCAP`); if it does not, no shot is
+   fired. Every poll prints a `gate temp_raw=` line.
 6. **The per-boot runner** (`bisect_shots.py`) fires the planned settings, many back-to-back shots per setting
    ("cells"), with a cap on shots per boot and a time limit per run. Every shot is logged with its parameters and
    its outcome.
@@ -99,6 +100,14 @@ Ask the owner first, every time, before `--shoot-through` (`SHOOT_THROUGH_STALLS
 pico-ga100vfi: no `g`, `r`/`j` or FLR while GFW is `0x01`; `run` refuses such a plan without
 `--owner-ok-shoot-through`), before `--on-poison continue`, before a floor below the plan's default, and before
 anything physical.
+
+## CiMP for agents (`cimp`)
+
+`./cimp config --yes --set KEY=VALUE ...` configures a bench without questions (or `CIMP_*` variables, no file at
+all), `./cimp config --json` reads the settings back with secrets masked, `./cimp config --test` checks the
+environment read-only (exit 1 on a failure), and `./cimp watch --log` gives one line per change of phase,
+temperature, fan cue or shot outcome. `./cimp hunt ...` is the goldilocks hunter with the profile's settings.
+`docs/CIMP.md` has the details. The stop rules below do not change.
 
 ## What stays with people
 

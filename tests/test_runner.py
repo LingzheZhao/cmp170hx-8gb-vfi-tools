@@ -33,7 +33,7 @@ CELL3 = STD + [3]
 def run(seq, shots, **env):
     with tempfile.TemporaryDirectory() as tmp:
         log = os.path.join(tmp, "events")
-        e = {k: v for k, v in os.environ.items() if not k.startswith(("FAKE_", "REPEAT", "SENTINEL", "FLOOR", "RETRAIN", "SBR", "PARK_EACH", "LOSTRUN", "VFI_", "BAD0_", "TRACE",
+        e = {k: v for k, v in os.environ.items() if not k.startswith(("FAKE_", "REPEAT", "SENTINEL", "SENT0_", "FLOOR", "RETRAIN", "SBR", "PARK_EACH", "LOSTRUN", "VFI_", "BAD0_", "TRACE",
                                                                      "LOST_NOPARK", "PARTIAL_CONTINUE", "SHOOT_THROUGH", "STALLRUN", "GFW_WAIT", "CELLLOST", "SHOTCAP"))}
         e.update(FAKE_LOG=log, FAKE_SHOTS=",".join(shots), FLOOR="381", VFI_BDF="0000:05:00.0", VFI_TRACE_DIR=tmp)
         e.update({k: str(v) for k, v in env.items()})
@@ -317,6 +317,38 @@ class RunnerTest(unittest.TestCase):
                                      "SHOT u g 400 -4000 700 -8000 0 0 0 1 12000 150 117 0",
                                      "SHOT u g 400 0 825 -20 0 3 3 1 65 150 117 0",
                                      "SHOT u g 450 -60 750 -20 0 1 0 3 25 150 117 0"])
+
+    def test_tv_field_reaches_the_firmware(self):
+        # 13th field: t_revert_us (tv), when the stock VOUT is written after the train (docs/OVERLAP_EDGE.md)
+        rc, out, ev = run([[381, -60, 1, 137, 625, 1, 1, 0, -20, 0, 117, 150, 171], [450, -60, 3, 198, 750, 1, 1]], "uu",
+                          FLOOR="338")
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(shots(ev), ["SHOT u g 381 -60 625 -20 171 1 0 1 137 150 117 0",
+                                     "SHOT u g 450 -60 750 -20 0 1 0 3 198 150 117 0"])
+        self.assertIn(" tv=171 kind=", out)
+        self.assertIn(" tv=0 kind=", out)
+        rc, out, ev = run([STD, [450, -60, 3, 198, 750, 1, 1, 0, -20, 0, 117, 150, 20001]], "uu")
+        self.assertNotEqual(rc, 0, out)
+        self.assertIn("AssertionError", out)
+        self.assertFalse(shots(ev))
+
+    def test_push3_marker_accepted(self):
+        rc, out, ev = run([STD], "u", FAKE_V="clk=400 MHz  last reset: x  fw=lab-psr1-push3-debug")
+        self.assertEqual(rc, 0, out)
+        rc, out, ev = run([STD], "u", FAKE_V="clk=400 MHz  last reset: x  fw=lab-psr1-push4-debug")
+        self.assertEqual(rc, 2, out)
+
+    def test_sent0_continue_is_opt_in(self):
+        rc, out, ev = run([CELL3], "zuu")
+        self.assertEqual(rc, 10, out)                                   # default: sentinel 0 with DSOV 1 = hidden poison
+        self.assertIn("hidden-poison alias 0x820410=0x00000000", out)
+        rc, out, ev = run([CELL3], "zuu", SENT0_CONTINUE="1")
+        self.assertEqual(rc, 0, out)                                    # opt-in: logged, the cell goes on
+        self.assertIn("SENT0 frame: DSOV=0x00000001 CRC=0x00000055", out)
+        self.assertEqual(len(shots(ev)), 3)
+        rc, out, ev = run([CELL3], "huu", SENT0_CONTINUE="1")
+        self.assertEqual(rc, 10, out)                                   # an error value still poisons
+        self.assertIn("hidden-poison alias 0x820410=0xbadf1020", out)
 
     def test_every_step_validated_before_the_first_shot(self):
         for bad_step in ([300, -60], [450, -60, 3, 198, 900], [450, -60, 3, 198, 750, 8], [450, -60, 3, 198, 750, 1, 1, 21],

@@ -1,0 +1,27 @@
+{
+ "default_profile": "bench1",
+ "profiles": {
+  "bench1": {
+   "bench_host": "bench.example.lan",
+   "bench_user": "root",
+   "bench_port": 22,
+   "ssh_auth": "key",
+   "ssh_key": "~/.ssh/id_ed25519",
+   "power": "wol",
+   "wol_mac": "aa:bb:cc:dd:ee:ff",
+   "wol_broadcast": "255.255.255.255",
+   "bench_dir": "/opt/vfi",
+   "bench_py": "/opt/vfi/venv/bin/python",
+   "pico_port": "/dev/serial/by-id/usb-Raspberry_Pi_Pico_EXAMPLE-if00",
+   "log_dir": "hunt-logs",
+   "card": "x",
+   "tmin_c": 39.5,
+   "tstart_c": 40.6,
+   "tmax_c": 41.8,
+   "cards": {
+    "x": {"tag": "card X", "gpc": "0x00000023", "smc": "SM now=70 ceiling=110"}
+   }
+  }
+ },
+ "version": 1
+}

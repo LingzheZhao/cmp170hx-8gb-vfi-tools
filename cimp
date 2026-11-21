@@ -1,0 +1,3 @@
+#!/bin/sh
+# CiMP launcher: python3 tools/cimp/cimp.py with the same arguments (cimp --help)
+exec python3 -I "$(dirname "$0")/tools/cimp/cimp.py" "$@"

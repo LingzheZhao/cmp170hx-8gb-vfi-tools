@@ -11,3 +11,8 @@ goldilocks.jsonl
 tools/runner/bench.conf
 bootrun-*.last
 hunt-logs/
+# CiMP keeps its config and generated files in ~/.config/cimp (mode 0600); never copy them in here
+cimp.json
+config.json
+!tools/cimp/config.example.json
+ssh_config

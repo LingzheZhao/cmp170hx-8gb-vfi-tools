@@ -5,6 +5,10 @@ What changed in how the lab searches for the glitch window, and why. Most of it 
 about 500 shots with the push2 firmware (`firmware/0009`) and the push2 runner (`tools/runner/`). One card is a
 report, not a rule: each item says what it rests on.
 
+The strategy that finished cards G and H on 2026-11-20 builds on this and adds two phases this page does not have
+(a map of the fuse read and a scan of the GPU's init right at the release): see `docs/SWEET_SPOT.md` and
+`tools/hunter/goldilocks_hunt.py`.
+
 ## 1. Check the release timing first
 
 Every shot is timed against the `PEX_RST` release (t = 0). The old step loop released late whenever a voltage write
@@ -108,6 +112,11 @@ and track drift (the window moved a few µs over a session, so repeat the best s
 Their reported hits sat at about 297 to 341 mV commanded, delays of 330 to 360 µs and widths of 198 to 220 µs; thousands
 of shots at delays of 90 to 160 µs never opened one card. They arm a burn only when DSOV 0, CRC `0x55`, the privilege
 mask all ones, row 0 intact and the target row blank show in the same read.
+
+Card H later showed what the codes are: CRC_STATUS is four 2-bit fields, one per fuse block, `01` = pass. `0x57` is
+block 0 failed, `0x75` block 2 failed, `0x77` both, and codes with a `00` or `10` field (`0x74`, `0x76`, `0x67`)
+appeared near a threshold. On card H no shot after the release ever moved DSOV, whatever the code
+(`docs/SWEET_SPOT.md`).
 
 What it changed here: before 2026-11-20 the lab's classifier scored any DSOV 1 as under without looking at CRC, so
 earlier campaigns could not see a CRC intermediate at all. The push2 runner calls a shot "under" only with DSOV 1,

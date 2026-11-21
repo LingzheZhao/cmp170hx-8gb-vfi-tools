@@ -5,7 +5,8 @@ host and a shell on it; the agent runs the tests itself, one boot per run, and w
 scripts in `tools/runner/` are the ones it drives. This page mirrors the
 [section on cmp.wiki](https://cmp.wiki/wiki/Voltage-glitch_unlock:_lab_method_on_a_Pico_2_W#Running_the_bench_autonomously_with_an_LLM_agent)
 and maps each step to the code here. `tools/planner/hunt.py` can also run the plan, run, ingest loop by itself
-(section "The hunter loop" below).
+(section "The hunter loop" below), and `tools/hunter/goldilocks_hunt.py` drives the strategy that finished cards G
+and H (section "The goldilocks hunter").
 
 ## What the agent controls
 
@@ -60,10 +61,50 @@ no agent needed:
 launchers. The search methods and the ledger format are in `tools/planner/README.md`; the method behind them is in
 `docs/METHOD.md`.
 
+## The goldilocks hunter (`tools/hunter/goldilocks_hunt.py`)
+
+The strategy that finished cards G and H (`docs/SWEET_SPOT.md`) as a tool an agent can drive phase by phase. It
+plans, runs through `bootrun.sh`, and reads the logs back; it never senses, arms or burns. `goldilocks_hunt.py
+strategy` prints the strategy and these rules.
+
+The loop:
+
+1. **Tally what is there.** `goldilocks_hunt.py tally <log dirs>` prints the map: counts per cell (depth, s1,
+   pulses, width, restore, slew) with the first shot of every run left out, the register codes seen (GFW, DSOV, CRC,
+   the mask, the sentinel), the edges between cells, the partial CRC codes, and a "Next" block. With no logs yet it
+   says: start with the community train.
+2. **Plan the phase the "Next" block names**, with the command it prints (`train`, `readmap --v N`, `init`,
+   `slow --v N`, `dwell ...`), and `--out plan.json`. Every step is checked against push2's release rule and the
+   runner's limits before it is written; `check` repeats that check on any step list.
+3. **Dry run**: `goldilocks_hunt.py run plan.json --card <name>` prints the boots it would run. Read them.
+4. **Run**: the same with `--execute --log-dir <dir>`. One `bootrun.sh` call per boot, a power cycle each time,
+   `NO_ON_HOLD=1` so no hold hook can run, every boot's log kept. A tip (lost, stall) moves the rest of the plan to a
+   new boot.
+5. **Back to 1** with the new logs.
+
+Stop rules: end the loop and report to the owner, with the log path, on
+
+- **a goldilocks hold** (`>>> GOLDILOCKS HELD`, or a goldilocks signature in a stall). Leave the card as it is: no
+  park, no shot, no power cycle. The owner runs the active sense, the window check and any burn, with their own tools.
+  Never burn, and never run a sense yourself;
+- **a partial or stall hold** (`>>> PARTIAL HELD`, `>>> STALL DSOV0 HELD`): read it, do not sense it;
+- **poison** (`run` stops on it by default; `--on-poison continue` only if the owner set the night up that way:
+  each poison costs a power cycle);
+- **a controller latch** (`CONTROLLER OFF`, STATUS_WORD `0x2042`);
+- **an unknown outcome**: a nack, NO DIP, a mistimed shot, a temperature gate or preflight failure, an exit code or
+  a line you do not recognise, a Python error. `run` exits 0 when the plan is done, 3 when it stopped for one of
+  these reasons (or a budget or `STOP` file), 4 on a hold, 2 when it refused the plan.
+
+Ask the owner first, every time, before `--shoot-through` (`SHOOT_THROUGH_STALLS=1` breaks rule 2 of upstream
+pico-ga100vfi: no `g`, `r`/`j` or FLR while GFW is `0x01`; `run` refuses such a plan without
+`--owner-ok-shoot-through`), before `--on-poison continue`, before a floor below the plan's default, and before
+anything physical.
+
 ## What stays with people
 
 - Physical work: swapping cards, placing and checking the probes, the fan.
-- Any burn approval, given per card for that card's reviewed plan.
+- Any burn approval, given per card for that card's reviewed plan, and the sense, window check and burn themselves.
+- Turning on shoot-through stalls, or going on after a poison without stopping.
 - The agent asks before anything that cannot be undone.
 
 ## What this buys

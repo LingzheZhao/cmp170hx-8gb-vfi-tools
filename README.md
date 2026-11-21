@@ -3,10 +3,14 @@
 Bench tools and firmware fixes for the Pico voltage-glitch ("goldilocks") method on NVIDIA CMP 170HX 8 GB cards
 (`10de:20c2`), built on [dalzyu/pico-ga100vfi](https://github.com/dalzyu/pico-ga100vfi).
 
-With this glitch setup, and a separate burn step that is not part of this repository, the lab finished three
-8 GB cards in November 2026: compute from 70 to 122, 120 and 108 SMs (126, 124 and 112 with the RECONFIG
-override), the 80 GB memory layout, and PCIe fuses that advertise 2.5 to 16 GT/s, all read back after a cold boot.
-The method, wiring, parts and results are on cmp.wiki:
+With this glitch setup, and a separate burn step that is not part of this repository, the lab finished five
+8 GB cards in November 2026: compute from 70 to 122, 122, 120, 118 and 108 SMs (126, 126, 124, 122 and 112 with the
+RECONFIG override), the 80 GB memory layout, and PCIe fuses that advertise 2.5 to 16 GT/s, all read back after a cold
+boot. The last two, cards G and H, were finished on 2026-11-20 by two different routes: card G with the community
+pulse train, card H, where that train did not work, by mapping where the glitch lands in the GPU's boot and then
+slowing the rail's fall. [`docs/SWEET_SPOT.md`](docs/SWEET_SPOT.md) turns both into one strategy, and
+[`tools/hunter/goldilocks_hunt.py`](tools/hunter/goldilocks_hunt.py) plans, runs and reads it back for a person or
+an LLM agent. The method, wiring, parts and results are on cmp.wiki:
 
 - [Voltage-glitch unlock: lab method on a Pico 2 W](https://cmp.wiki/wiki/Voltage-glitch_unlock:_lab_method_on_a_Pico_2_W)
 - [Voltage-glitch unlock: lab results and fuse findings](https://cmp.wiki/wiki/Voltage-glitch_unlock:_lab_results_and_fuse_findings)
@@ -22,7 +26,8 @@ The method, wiring, parts and results are on cmp.wiki:
 | Path | What |
 |---|---|
 | `firmware/` | Ten patches against pico-ga100vfi (`git am`-ready), with a README. The current firmware is push2 (`fw=lab-psr1-push2`): `PEX_RST` released by a primed hardware alarm from SRAM, on time from the first shot of a boot, and a timeline that fails closed (no write across the release, card kept in reset on a failed step). Also: each card's own VRM profile restored after every shot, a classifier that stops at a poisoned fuse controller and no longer writes EN_SW_OVERRIDE unless asked, an unlock that always writes and reads back the config registers, lab knobs, per-step timing telemetry, a passive BAR0 snapshot, and serial replies read to the end of the line |
-| `tools/runner/` | The push2 per-boot runner (`bisect_shots.py`), park and preflight, and the launchers: `bootrun.sh` (power cycle, fresh-boot guard, plan checksum, host guard, preflight, identity, temperature gate, runner, hold hook), `firstshot.sh` (one fresh boot per step) and `campaign.sh` (a ladder across boots), as the lab ran them; see `docs/RUNNER.md` |
+| `tools/hunter/goldilocks_hunt.py` | The goldilocks hunter: plans each phase of `docs/SWEET_SPOT.md` (community train ladder, fuse-read window map, init-phase release-edge scan, slow-slew edge scan, dwell) with every step checked against push2's release rule, drives `bootrun.sh` through a plan (dry run unless `--execute`, stops on poison, latch, holds and unknown outcomes), and tallies runner logs per cell (counts, GFW/DSOV/CRC/mask/sentinel codes, edges, partial CRC codes, the first shot of each boot left out) into the next phase. Never senses or burns; standard library only |
+| `tools/runner/` | The push2 per-boot runner (`bisect_shots.py`), park and preflight, and the launchers: `bootrun.sh` (power cycle, fresh-boot guard, plan checksum, host guard, preflight, identity, temperature gate, runner, hold hook), `firstshot.sh` (one fresh boot per step) and `campaign.sh` (a ladder across boots), as the lab ran them; see `docs/RUNNER.md`. Since 2026-11-21 the runner also has the lab's behaviour from cards G and H: read-only stall reads, compass frames, no parks with a 100 ms `PEX_RST` recovery and a healthy-read gate, opt-in shooting through stalls and partials, the sentinel rule for DSOV 0, and a machine-readable line per shot |
 | `tools/planner/` | The planner and hunter: an append-only shot ledger, a log parser, a next-shot planner (loss island, delay sweep, CRC compass, drift loop) under never-rules, and `hunt.py`, which runs plan, launch, ingest in a loop with stop rules (dry run unless `--execute`). Example card and family files, an empty ledger and a small synthetic sample; see `tools/planner/README.md` |
 | `tools/diag/` | Two gentle 700 mV checks: where the `PEX_RST` release lands per kind of shot (`timing_controls.py`), and whether EN_SW_OVERRIDE survives `PEX_RST` (`enswtest.py`) |
 | `tools/vfi_preflight.py` | Read-only checks before a session: firmware marker, who controls the rail, the card's six VRM profile registers (stops on a leftover fast value), host lockdown, driver, config space, FUSECTRL, GFW boot progress |
@@ -34,10 +39,11 @@ The method, wiring, parts and results are on cmp.wiki:
 | `tools/vfi_edge.py` | Edge tracker: walks the train timing along a card's lethal edge in short cells, with a crash budget |
 | `tools/vfi_common.py` | Shared code: park, poison-safe classify, bounds, the no-dip check, per-boot shot ledger |
 | `tests/` | Offline tests against a simulated Pico, voltage controller and card, a fake `ga100vfi` package for the runner, and fake `ssh`/`scp`/power tools for the launchers |
+| `docs/SWEET_SPOT.md` | The strategy that finished cards G and H, in order, with both cards as worked examples and their data: the community train, the fuse-read map, the init phase, the slow slew, the hold |
 | `docs/METHOD.md` | How the lab searches now, and why: on-time release first, park-normalized shots, slow slew and a lower restore against link loss, restore 588 mV against the controller latch, delay as a knob and the 47 µs rule, CRC as a compass, what one card showed, the search order that worked best |
 | `docs/MEASUREMENTS.md` | What the bench measured: write time, release slip, the 36 µs width floor, EN_SW_OVERRIDE, sticky poison, the controller-off latch |
 | `docs/RUNNER.md` | How to use the runner and the launchers |
-| `docs/AUTONOMOUS_AGENT.md` | Running the bench with an LLM agent: access, the loop, the guard rails, what stays with people |
+| `docs/AUTONOMOUS_AGENT.md` | Running the bench with an LLM agent: access, the loop, the goldilocks hunter's loop and stop rules, the guard rails, what stays with people |
 | `docs/UPSTREAM_PR.md` | Pull request text for the firmware patches |
 
 ## Setup
@@ -89,6 +95,16 @@ sudo -E $PY tools/vfi_snap.py --label held                       # read the held
 sudo -E $PY tools/vfi_park.py                                     # always end here
 ```
 
+The goldilocks hunter (`docs/SWEET_SPOT.md`), from the machine that runs `bootrun.sh`:
+
+```sh
+H=tools/hunter/goldilocks_hunt.py
+python3 $H strategy                                       # the strategy and the stop rules
+python3 $H train --out plan-train.json                    # phase 2: the community train, shallow to deep
+python3 $H run plan-train.json --card example             # dry run; add --execute --log-dir logs/train to shoot
+python3 $H tally logs/train                               # the map and the next phase (readmap, init, slow, dwell)
+```
+
 More examples:
 
 ```sh
@@ -128,7 +144,8 @@ agent gets, the loop, the guard rails and what stays with people.
 | Outcome | What the reads show | Meaning |
 |---|---|---|
 | under | DSOV still 1 (the runner also wants CRC `0x55` and a full privilege mask) | dip too shallow, or at the wrong time |
-| CRC moved | DSOV 1 and CRC `0x77` (closed) or `0x75` / `0x57` (adjacent) | the shot reached the fuse read's CRC; densify here (`docs/METHOD.md`, section 6) |
+| CRC moved | DSOV 1 and CRC `0x77` (closed) or `0x75` / `0x57` (adjacent) | the shot reached the fuse read's CRC; densify here (`docs/METHOD.md`, section 6). Read as four 2-bit fields, `0x57` is block 0 failed, `0x75` block 2 failed, `0x77` both (`docs/SWEET_SPOT.md`) |
+| stall | GFW boot progress not done after the shot; a read-only stall read logs FUSECTRL, DSOV, CRC, the mask and the sentinel | the glitch landed in the fuse read or the GPU's init; a stall with DSOV 0 is held, and by default a stall ends the boot |
 | over | DSOV 0, CRC not `0x55` | too deep |
 | hit | DSOV 0 and CRC `0x55`, another check fails (usually the privilege mask) | close, not burnable |
 | goldilocks | DSOV exactly 0, CRC `0x55`, privilege mask `0xFFFFFFFF`, FPF row readable (and the DSOV write-back, when `CLASSIFY_WRITE=1`) | the target state |
@@ -198,6 +215,9 @@ privilege mask stuck at `0xFFFFFEFE`; a sense on one of them poisoned the contro
   is read, and the same holds for a `0xBADF` DSOV (patch 0005). The runner and `passive_snapshot.py` (patch 0010)
   also stop at any `0xBAD0xxxx` read and at a FUSECTRL other than the idle `0xE0040000`. A poisoned controller stays
   poisoned until a power cycle, so a poisoned shot ends the run.
+- **Stalls.** A GFW that is still booting after a shot gets one read-only stall read (FUSECTRL first) and, by
+  default, ends the boot without another `g`, `r`/`j` or FLR, as upstream's rule 2 asks. `SHOOT_THROUGH_STALLS=1`
+  breaks that rule on purpose and is off unless you turn it on.
 - **Release timing.** push2 refuses any shot with a write in flight across the `PEX_RST` release, keeps the card in
   reset when a step fails, and the runner refuses to score a shot that was not released on time.
 - **No EN_SW_OVERRIDE writes.** The stock classifier wrote `0x820040` (EN_SW_OVERRIDE) after every shot, and that
@@ -234,6 +254,9 @@ privilege mask stuck at `0xFFFFFEFE`; a sense on one of them poisoned the contro
   (2026-11-20).
 - `tools/planner/` is the lab's planner and hunter with its ledger left out; it planned from the lab's logs and
   passes its offline tests against a fake bench. It had not run unattended on a card in this form when published.
+- `tools/hunter/` and the runner's additions of 2026-11-21 follow the lab's runner and its strategy for cards G and H
+  (2026-11-20). They pass the offline tests, and the tally reproduces both cards' maps from the lab's logs; they had
+  not run on a card in this form when published (2026-11-21).
 - `tools/vfi_*.py` are cleaned-up, generic versions of earlier bench scripts. They pass the offline tests and had
   not run on a card in this form when published (2026-11-19).
 
@@ -248,6 +271,7 @@ pyserial):
 GA100VFI_HOST=/path/to/pico-ga100vfi/host python3 -I tests/test_tools.py
 GA100VFI_HOST=/path/to/pico-ga100vfi/host python3 -I tests/test_runner.py
 python3 -I tests/test_launchers.py
+python3 -I tests/test_hunter.py
 (cd tools/planner/tests && python3 -I -m unittest discover -s . -t .)
 (cd /path/to/pico-ga100vfi/host && python3 -m unittest test_classify test_passive_snapshot test_serial_response)
 ```

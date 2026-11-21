@@ -19,7 +19,8 @@ hook. Nothing here burns fuses. The current runner is the push2 runner: it needs
 
 `tools/diag/` has two gentle checks at 700 mV: `timing_controls.py` (where the `PEX_RST` release lands with each kind
 of shot) and `enswtest.py` (whether EN_SW_OVERRIDE survives `PEX_RST`; writes that register). `tools/planner/`
-plans the steps and can drive the launchers in a loop (`tools/planner/README.md`).
+plans the steps and can drive the launchers in a loop (`tools/planner/README.md`). `tools/hunter/goldilocks_hunt.py`
+plans the phases of `docs/SWEET_SPOT.md`, drives `bootrun.sh` through them and tallies the logs.
 
 ## On the bench
 
@@ -52,9 +53,22 @@ written (`docs/METHOD.md`, section 5). Order the steps from the weakest effect t
 - **Single mode** (every step 1 shot): the run stops at the first shot that is not "under".
 - **Cell mode** (`REPEAT` > 1 or a `reps` field > 1): each step is a cell of shots. A lost shot is parked and the run
   goes on; `LOSTRUN` lost shots in a row stop the run, `CELLLOST` lost shots in a row skip the rest of a cell, and
-  `SHOTCAP` caps the shots per run. A partial (DSOV 0 that is not goldilocks) is held: the run stops with exit 13
-  and nothing more is read or fired. Every cell ends with a count line:
-  `cell 3 v=369 td=-60 np=3 pw=80 vr=750: {'under': 5, 'lost': 0, 'partial': 0, 'other': 0}`.
+  `SHOTCAP` caps the shots per run. A compass frame (DSOV 1, full mask, CRC other than `0x55`) is logged and the
+  cell goes on. A partial (DSOV 0 that is not goldilocks) is held: the run stops with exit 13 and nothing more is
+  read or fired, unless `PARTIAL_CONTINUE=1`. Every cell ends with a count line:
+  `cell 3 v=369 td=-60 np=3 pw=80 vr=750: {'under': 5, 'lost': 0, 'partial': 0, 'other': 0}` (plus `compass` and
+  `stall` when there were any).
+- **No parks, reset pulse after a loss** (`LOST_NOPARK=1`, cell mode): no park after a lost shot. The runner sends one
+  100 ms `PEX_RST` pulse (the firmware's `r`, which must answer `released`), waits for the link and reads the card
+  passively; it has to read healthy and locked (FUSECTRL idle, DSOV 1, CRC `0x55`, full mask, sentinel), or the boot
+  ends (exit 10). This is how the lab shot cards G and H: on its bench the park's hand-back left BAR0 dead.
+- **Through partials** (`PARTIAL_CONTINUE=1`, cell mode): a readable DSOV-0 frame that is not goldilocks is logged
+  and shooting goes on. Card G's goldilocks came two shots after such a frame. Nothing is sensed or written.
+- **Through stalls** (`SHOOT_THROUGH_STALLS=1`, cell mode, off by default): the next shot fires while GFW is still
+  stalled, and `STALLRUN` stalls in a row (default 8) end the boot. This breaks rule 2 of upstream pico-ga100vfi's
+  AGENTS.md (never `g`, `r`/`j` or FLR while GFW boot status is `0x01`): it can wedge the GFW boot sequencer. A clean
+  host power cycle recovered the card every time on the lab's bench. The runner prints a warning; ask the card's
+  owner first. Without it, a stall ends the boot without a park.
 - **Park-normalized** (`PARK_EACH=1`): a park before every shot after the first, so each shot starts like the first
   shot of a boot and many comparable shots fit in one boot (`docs/METHOD.md`, section 2).
 
@@ -74,29 +88,49 @@ After every shot the runner checks, in order:
 4. The controller: STATUS_WORD bit 6 (OFF) or READ_VOUT below 500 mV is **CONTROLLER OFF** (exit 9).
 5. The link (`RESTORE_WAIT`, default 8 s). No link is **lost**.
 6. The passive read, in this order, with no BAR0 writes: FUSECTRL (must be exactly the idle `0xE0040000`), GFW (low
-   byte `0xFF`; still booting is polled for up to 5 s), DSOV (0 or 1), CRC, privilege mask. A `0xBADFxxxx` or
-   `0xBAD0xxxx` value is **poisoned** and nothing else is read. With `BAD0_FOLLOWUP=1` a `0xBAD0` FUSECTRL gets one
-   more FUSECTRL read 3 s later, logged only.
-7. The `SENTINEL` alias register (default `0x820410`) must equal the boot's baseline; `0`, all-ones, `0xBAD.....` or
-   any other value is **hidden-poison**.
-8. The verdict: DSOV 1 with CRC `0x55` and a full mask is **under**; DSOV 0 with CRC `0x55`, a full mask and a clean
+   byte `0xFF`), DSOV (0 or 1), CRC, privilege mask. A `0xBADFxxxx` or `0xBAD0xxxx` value is **poisoned** and nothing
+   else is read. With `BAD0_FOLLOWUP=1` a `0xBAD0` FUSECTRL gets one more FUSECTRL read 3 s later, logged only.
+7. A GFW that is still booting is polled for `GFW_WAIT` seconds (default 5). If it is still booting, that is a
+   **stall**, and the runner reads once more, read-only: FUSECTRL first (a `0xBADF` or `0xBAD0` value is poisoned and
+   ends the boot; a busy FUSECTRL ends it too), then GFW, DSOV, CRC, the mask and the sentinel, logged as
+   `stall read (...)`. A stall with DSOV 0 is held (`>>> STALL DSOV0 HELD`, exit 15), whatever else it shows: a
+   goldilocks signature in a stall is not a finished boot. The one exception is a DSOV-0 stall that is not a
+   goldilocks signature with `PARTIAL_CONTINUE=1` and `SHOOT_THROUGH_STALLS=1`, which is logged as `STALL PARTIAL`.
+8. The `SENTINEL` alias register (default `0x820410`). With DSOV 1 it must equal the boot's baseline; `0`, all-ones,
+   `0xBAD.....` or any other value is **hidden-poison**. With DSOV 0 the option shadows have not been sensed and the
+   alias reads 0 in a real goldilocks (one real goldilocks frame on card G was thrown away before this rule), so then
+   only all-ones or a `0xBAD.....` value is poison. A stall read logs the sentinel and never scores it.
+9. The verdict: DSOV 1 with CRC `0x55` and a full mask is **under**; DSOV 0 with CRC `0x55`, a full mask and a clean
    sentinel is **GOLDILOCKS**; CRC 0 with mask 0 is **poisoned/over0**; anything else is printed as read
    (`dsov1 crc=0x77 priv=..`, `dsov0 crc=0x55 priv=0xfffffefe`, ...), so a CRC change after a shot shows.
 
+Every fired shot also gets one line for `tools/hunter/goldilocks_hunt.py tally`:
+
+```
+SHOT n=1 step=0 v=381 td=70 np=1 pw=198 vr=750 fast=1 delay=117 gap=150 s1=-47 first=0 after_park=0 stall=1 kind=stall FUSECTRL=0xe0040000 GFW=0x00000000 DSOV=0x00000001 CRC=0x00000055 PLM=0xffffffff SENTINEL=0x00000000 | booting GFW=0x00000000 (GFW stall)
+```
+
+`n` counts the shots of this run, `s1` is `td - delay`, `kind` is one of under, compass, stall, partial, goldilocks,
+lost, poison, latch, mistimed, nodip, unknown or other, and `first=1` marks shot 0 of the run. That shot starts from
+the GPU's own rail control (PWM-VID, about 694 mV on card H) where every later shot starts from a rail held under
+PMBus, and it behaved differently on the lab's cards; the tally does not count it.
+
 On GOLDILOCKS the runner prints `>>> GOLDILOCKS HELD (<tag>) v=.. td=..` and exits 0 without parking: the rail stays
 under PMBus control and the state stays readable. It is a passive candidate: validate it actively before anything
-else. A finished sequence and a tipped run end with a park. A held goldilocks or partial, a GFW that is still
-booting, a mistimed goldilocks (left for review) and the stops for controller off, no dip, a cut-off reply and a
-refused shot do not park: power-cycle. After a failed park the root port's link and error lines are logged from a
+else. A finished sequence and a tipped run end with a park. A held goldilocks, partial or stall, a GFW that is still
+booting (also after the last shot of a sequence), a mistimed goldilocks (left for review) and the stops for
+controller off, no dip, a cut-off reply and a refused shot do not park: power-cycle. Poison and a controller latch
+always end the boot. After a failed park the root port's link and error lines are logged from a
 read-only `lspci -vv`.
 
 Exit codes: 0 sequence done or goldilocks held, 2 usage, firmware, unlock readback or a refused step, 7 park failed
 before a step, 9 controller off or unsafe baseline, 10 tipped, 11 nack or failed writes, 12 no dip, 13 partial held,
-14 mistimed.
+14 mistimed, 15 DSOV 0 held during a GFW stall.
 
 Environment: `VFI_BDF` (required), `VFI_PORT`, `VFI_PARK`, `VFI_TRACE_DIR`, `FLOOR` (lowest dip, default 381 mV),
-`REPEAT`, `SHOTCAP`, `LOSTRUN`, `CELLLOST`, `RESTORE_WAIT`, `SENTINEL` (0 turns it off), `SENTINEL_EXPECT`,
-`PARK_EACH=1`, `TRACE=1` (NVVDD traces, debug firmware, NVVDD lead on), `BAD0_FOLLOWUP=1`. `RETRAIN` and `SBR`
+`REPEAT`, `SHOTCAP`, `LOSTRUN`, `CELLLOST`, `RESTORE_WAIT`, `GFW_WAIT` (default 5 s), `SENTINEL` (0 turns it off),
+`SENTINEL_EXPECT`, `PARK_EACH=1`, `LOST_NOPARK=1`, `PARTIAL_CONTINUE=1`, `SHOOT_THROUGH_STALLS=1` with `STALLRUN`,
+`TRACE=1` (NVVDD traces, debug firmware, NVVDD lead on), `BAD0_FOLLOWUP=1`. `RETRAIN` and `SBR`
 (link retrain, secondary bus reset) are refused. The runner never writes BAR0, so `CLASSIFY_WRITE` only matters to
 tools that call the patched `classify()`.
 
@@ -128,12 +162,16 @@ FLOOR=331 TMIN=360 TCAP=300 PARK_EACH=1 REPEAT=1 LOSTRUN=1 CELLLOST=1 BAD0_FOLLO
    different card stops the run.
 8. **Temperature gate**: wait until READ_TEMP1 (raw) reaches `TMIN`, for up to `TCAP` seconds; if it does not, no shot
    is fired (`TEMP GATE FAILED`, exit 16).
-9. **Run** `bisect_shots.py` with a time limit (`RUNTO`) and the runner settings from the environment; the card's
+9. **Run** `bisect_shots.py` with a time limit (`RUNTO`) and the runner settings from the environment (`REPEAT`,
+   `SHOTCAP`, `LOSTRUN`, `RESTORE_WAIT`, `CELLLOST`, `CLASSIFY_WRITE`, `SENTINEL`, `BAD0_FOLLOWUP`, `GFW_WAIT`,
+   `LOST_NOPARK`, `PARTIAL_CONTINUE`, `SHOOT_THROUGH_STALLS`, `STALLRUN`, `FLOOR`, `TRACE`, `PARK_EACH`); the card's
    `SENTINEL_EXPECT` comes from `bench.conf`. The remote half exits with the runner's status and the launcher passes
    it on.
 10. **Hold**: when a line starts with `>>> GOLDILOCKS HELD` and the runner exited 0, `bootrun.sh` runs `ON_HOLD` if it
     is set (with `CARD`, `TAG`, `BENCH_SSH`, `BENCH_DIR` and `RUN_LOG` in its environment) and exits with its status;
-    otherwise it stops and reports the held state. A hold line with any other runner status does not run the hook.
+    otherwise it stops and reports the held state. A hold line with any other runner status does not run the hook,
+    a stall hold (`>>> STALL DSOV0 HELD`, exit 15) never does, and `NO_ON_HOLD=1` turns the hook off for one run
+    whatever `bench.conf` says (`tools/hunter/goldilocks_hunt.py run` always sets it).
 
 The run log goes to `BOOTRUN_LOG` or `LOG_DIR/bootrun-<card>.last`; the last line is
 `RESULT: ... (runner rc N)` or the hold report. Exit codes are listed at the top of the script.
@@ -165,7 +203,9 @@ python3 -I tests/test_launchers.py
 command, BAR0 read and park, and fails the test on any BAR0 write) through every outcome and stop: under, lost with
 and without a working park, poisoned FUSECTRL, DSOV and CRC, a busy FUSECTRL, hidden poison, goldilocks and partial
 holds, mistimed shots, no dip, controller off, refused and cut-off shots, the delay and gap fields, `BAD0_FOLLOWUP`,
-park hygiene and step validation. With `GA100VFI_HOST` it also checks that the runner's copy of `observe()` matches
+park hygiene and step validation; and the paths of 2026-11-21: stall reads (with poison found in one), stall holds,
+shoot-through with its cap, compass frames, `PARTIAL_CONTINUE`, `LOST_NOPARK` with and without a healthy readback,
+the sentinel rule for DSOV 0, and the SHOT lines. `tests/test_hunter.py` covers the hunter. With `GA100VFI_HOST` it also checks that the runner's copy of `observe()` matches
 the patched `passive_snapshot.observe` on 6,000 random reads. `tests/test_launchers.py` runs `firstshot.sh` and
 `campaign.sh` against a fake `bootrun.sh`, and `bootrun.sh` against fake `ssh`, `scp`, `ping` and power tools with a
 `bench.conf` in a temp dir.

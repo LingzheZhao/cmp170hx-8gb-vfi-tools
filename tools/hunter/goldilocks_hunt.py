@@ -14,7 +14,10 @@ Subcommands (docs/SWEET_SPOT.md explains the order and the reasons):
   init      phase 4: the init phase: one fast dip from s1 = -47 (the write ends at the release) down to about -100
   slow      phase 5: the same scan at one code with the card's stock (slow) slew, fast 0
   dwell     one cell, many shots, optionally over several fresh boots
-  check     run the push2 legality model over a step list or a plan file (exit 1 if a step is illegal)
+  overlap   phase 6 (push3 firmware only): one long dip with its restore write in flight across the release, so the
+            rail is still low at the release and comes back up 0 .. +17 us after it (docs/OVERLAP_EDGE.md)
+  check     run the legality model over a step list or a plan file (exit 1 if a step is illegal); push2's release
+            rule unless the plan carries "allow_overlap" or you pass --allow-overlap (push3)
   tally     per-cell counts and register codes from runner logs, edges, partial CRC codes and the next phase
   run       drive tools/runner/bootrun.sh through a plan file, one boot at a time (a dry run unless --execute);
             exit 0 plan done, 2 refused, 3 stopped (poison, latch, unknown outcome, budget, STOP file),
@@ -22,11 +25,14 @@ Subcommands (docs/SWEET_SPOT.md explains the order and the reasons):
   strategy  print the strategy, the agent loop and the stop rules
 
 A runner step is [v_mV, td_us, pulses, pw_us, v_restore_mV, fast, reps, hold_ms, t_restore_us, revert, delay_us,
-gap_us]. The dip write of pulse k is queued at td - delay + k * (pw + gap) and its restore write pw later. s1 is
+gap_us] plus an optional 13th field tv (t_revert_us, when the stock VOUT is written after the train). The dip write
+of pulse k is queued at td - delay + k * (pw + gap) and its restore write pw later. s1 is
 td - delay, the start of the first dip write relative to the PEX_RST release at t = 0. One PMBus write takes about
 47 us and push2 refuses a shot with a write queued at start <= 0 that is still running at 0, so s1 in (-47, 0] is
 illegal and s1 = -47 (the write ends exactly at the release) is legal. Every step this tool emits passes that model
-(tools/planner/planner_auto/schedule.py, a port of the firmware's timeline) and the runner's limits.
+(tools/planner/planner_auto/schedule.py, a port of the firmware's timeline) and the runner's limits. The `overlap`
+phase is the one exception: it needs push3 (firmware/0011), which runs a write across the release and still releases
+on time; its plans carry "allow_overlap": true and are refused on push2 by the firmware itself (glitch ABORT).
 
 Examples:
   goldilocks_hunt.py train --out plan-train.json
@@ -38,6 +44,8 @@ Examples:
   goldilocks_hunt.py slow --v 375 --out plan-slow.json
   goldilocks_hunt.py dwell --v 375 --s1 -55 --fast 0 --reps 2 --boots 4 --out plan-dwell.json
   goldilocks_hunt.py check '[[375,62,1,198,750,0,2,0,-20,0,117,150]]'
+  goldilocks_hunt.py overlap --v 388,381,375,369 --out plan-overlap.json      # push3 only
+  goldilocks_hunt.py check --allow-overlap '[[381,-60,1,137,625,1,1,0,-20,0,117,150,171]]'
 """
 import argparse
 import collections
@@ -84,7 +92,12 @@ The strategy (docs/SWEET_SPOT.md has the reasons and the two worked examples, ca
    Look for sentinel 0 with CRC 0x55 (the init was disturbed), then the poison edge, 1 to 3 us wide.
 5. At the code where s1 near -47 reads under and a few us earlier is poison (card H: 375 mV), switch to the slow
    slew (fast 0) and step s1 from -47 to -100: the rail is mid-fall at the release:  goldilocks_hunt.py slow --v <code>
-6. Hold any goldilocks frame for the active sense and the window check. Only a cold boot verifies a burn.
+6. Under then straight to link loss, CRC44 frames (DSOV 0 with fuse blocks 0 and 2 skipped) or 'over' frames, and
+   nothing in between, on every shape above: flash push3 (firmware/0011, docs/PUSH3.md) and scan the release edge
+   itself, one long dip whose restore write is in flight across the release:  goldilocks_hunt.py overlap
+   Card E (ceiling 110) went from 2,200 shots without a goldilocks to one on the 13th overlap shot: 381 mV, dip write
+   at -177 us, restore write -40 .. +7 us (rail back up about 7 us after the release), restore 625, tv 171.
+7. Hold any goldilocks frame for the active sense and the window check. Only a cold boot verifies a burn.
 
 Shot budget: each poison or latch costs a power cycle; edges are 1 us sharp, so use 1 or 2 us steps near an edge and
 3 or 4 shots per cell. The first shot of every boot starts from the GPU's own rail control and does not count.
@@ -120,11 +133,11 @@ def writes(step):
     return out
 
 
-def problems(step, floor, pw_min=W):
-    """Why the runner, push2 or the never-rules would refuse this step (empty list = legal)."""
+def problems(step, floor, pw_min=W, allow_overlap=False):
+    """Why the runner, push2 (push3 with allow_overlap) or the never-rules would refuse this step (empty = legal)."""
     if not isinstance(step, (list, tuple)) or len(step) < 2:
         return ["not a step list: %r" % (step,)]
-    why = Rules({"floor_mv": floor, "pw_min_us": pw_min}).check(S.from_list(step))
+    why = Rules({"floor_mv": floor, "pw_min_us": pw_min, "allow_overlap": allow_overlap}).check(S.from_list(step))
     d = S.from_list(step)
     if d["pulses"] < 1 or d["pulses"] > 16:
         why.append("pulses %d outside 1..16" % d["pulses"])
@@ -172,6 +185,10 @@ def base_env(a):
            "SHOOT_THROUGH_STALLS": 1 if a.shoot_through else 0, "STALLRUN": a.stallrun,
            "PARTIAL_CONTINUE": 1 if a.continue_partials else 0, "BAD0_FOLLOWUP": 1, "LOSTRUN": a.lostrun,
            "SHOTCAP": 450}
+    if getattr(a, "continue_sent0", False):
+        env["SENT0_CONTINUE"] = 1
+    if getattr(a, "trace", False):
+        env["TRACE"] = 1
     return env
 
 
@@ -189,6 +206,12 @@ def new_plan(a, phase, label, columns, on_poison, notes):
             "created": _dt.datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
             "env": base_env(a), "warmup": warm, "extra_first_rep": extra, "on_poison": on_poison,
             "max_shots_per_boot": a.max_shots_per_boot, "columns": columns, "notes": list(notes)}
+    if getattr(a, "allow_overlap", False):
+        plan["allow_overlap"] = True
+        plan["firmware"] = "push3"
+        plan["notes"].append("allow_overlap: some writes run across the PEX_RST release. Needs push3 firmware "
+                             "(fw=lab-psr1-push3, firmware/0011); push2 refuses these shots with a glitch ABORT line "
+                             "and the runner stops (exit 2) without firing.")
     if a.shoot_through:
         plan["notes"].append("SHOOT_THROUGH_STALLS=1: shots fire while GFW is stalled. This breaks rule 2 of upstream "
                              "pico-ga100vfi (never g, r/j or FLR while GFW boot status is 0x01) and can wedge the GFW "
@@ -203,14 +226,15 @@ def new_plan(a, phase, label, columns, on_poison, notes):
 def check_plan(plan, floor=None, pw_min=W):
     """[(where, step, reasons)] for every illegal step of a plan (warm-up included)."""
     fl = plan.get("env", {}).get("FLOOR", 0) if floor is None else floor
+    ov = bool(plan.get("allow_overlap"))
     bad = []
     if plan.get("warmup"):
-        why = problems(plan["warmup"], fl, pw_min)
+        why = problems(plan["warmup"], fl, pw_min, ov)
         if why:
             bad.append(("warm-up", plan["warmup"], why))
     for ci, col in enumerate(plan.get("columns", [])):
         for si, st in enumerate(col.get("steps", [])):
-            why = problems(st, fl, pw_min)
+            why = problems(st, fl, pw_min, ov)
             if why:
                 bad.append(("column %d step %d" % (ci, si), st, why))
     return bad
@@ -220,7 +244,7 @@ def build_columns(a, cells, group_by, new_boot=False):
     """cells: [(group_key, label, step)]; keeps only legal steps, grouped into columns. Returns (columns, skipped)."""
     cols, skipped, order = collections.OrderedDict(), [], []
     for key, label, st in cells:
-        why = problems(st, a.floor, a.pw_min)
+        why = problems(st, a.floor, a.pw_min, getattr(a, "allow_overlap", False))
         if why:
             skipped.append((st, why))
             continue
@@ -339,7 +363,9 @@ def cmd_dwell(a):
         raise SystemExit("dwell needs --s1 (or --td with --delay)")
     s1 = a.s1 if a.s1 is not None else a.td - a.delay
     st = make_step(a.v, s1, a.np, a.pw, a.vr, a.fast, a.reps, a.delay, a.gap)
-    why = problems(st, a.floor, a.pw_min)
+    if getattr(a, "tv", 0):
+        st = list(st) + [int(a.tv)]
+    why = problems(st, a.floor, a.pw_min, getattr(a, "allow_overlap", False))
     if why:
         raise SystemExit("illegal dwell cell %s: %s" % (json.dumps(st), "; ".join(why)))
     label = "dwell %d mV (code %d) %dx%d s1 %+d fast %d restore %d" % (a.v, mv_to_code(a.v), a.np, a.pw, s1, a.fast, a.vr)
@@ -347,6 +373,43 @@ def cmd_dwell(a):
     notes = ["One column per fresh boot. Card G hit at its dwell setting after about 100 shots over a day; card H hit "
              "on the first counted shot of a fresh boot."]
     emit(a, new_plan(a, "dwell", label, cols, "next_column", notes), [])
+
+
+def overlap_cells(a):
+    """[(v, label, step)] for the overlap phase: per depth, per dip-write start s1 (one long dip, fall about 47 us
+    later), restore write rw = rise - 47 so the rail comes back up at `rise` us after the release; tv pinned so the
+    stock 787.5 mV write lands at the same time on every shot and only the restore edge moves."""
+    cells, out = [], []
+    rises = parse_list(a.rises)
+    if a.anchor:
+        rises = rises + [W + 1]          # restore write at +1 us: legal on push2, rail back at +48 (card E: CRC44)
+    for v in parse_list(a.v):
+        for s1 in parse_list(a.s1):
+            for rise in rises:
+                rw = rise - W
+                pw = rw - s1
+                st = make_step(v, s1, 1, pw, a.vr, a.fast, a.reps, a.delay, a.gap) + [int(a.tv)]
+                b = schedule.build_for_step(S.from_list(st))
+                if b["abort"] or b["resolved"]["post"] != int(a.tv):
+                    raise SystemExit("tv %d does not pin the stock write for %s (post %s): raise --tv"
+                                     % (a.tv, json.dumps(st), b["resolved"].get("post")))
+                cells.append((v, "%d mV (code %d) one long dip, write s1 %+d, rail back up %+d us after the release"
+                              % (v, mv_to_code(v), s1, rise), st))
+    return cells
+
+
+def cmd_overlap(a):
+    a.allow_overlap = True
+    cols, skipped = build_columns(a, overlap_cells(a), "v")
+    notes = ["push3 only: the restore write is in flight across the release (rail still low at t = 0, back up a few us "
+             "after it). push2 aborts these shots (glitch ABORT) before firing.",
+             "Card E: rail back up 0 us = under, +7 .. +37 us = over (DSOV 0, blocks wiped), +43 us = light stall, +48 us "
+             "= under or CRC44; the goldilocks was at +7 us with the dip write at s1 -177 (381 mV, restore 625, tv 171).",
+             "Check every shot's release_at=0 via=alarm line (the runner scores nothing else) and, with --trace, that the "
+             "NVVDD time below 450 mV grows with pw (about pw - 3 us on card E).",
+             "Fragile cards: no conditioning or warm-up shot at a deep code (use --warmup none or extra)."]
+    emit(a, new_plan(a, "overlap", "release-edge overlap scan %s mV, s1 %s, rise %s us" % (a.v, a.s1, a.rises),
+                     cols, "next_step", notes), skipped)
 
 
 def cmd_check(a):
@@ -362,6 +425,7 @@ def cmd_check(a):
         for ci, col in enumerate(obj.get("columns", [])):
             items += [("column %d step %d" % (ci, si), st) for si, st in enumerate(col.get("steps", []))]
         floor = a.floor if a.floor is not None else obj.get("env", {}).get("FLOOR", 0)
+        a.allow_overlap = a.allow_overlap or bool(obj.get("allow_overlap"))
     else:
         if obj and not isinstance(obj[0], list):
             obj = [obj]
@@ -369,7 +433,7 @@ def cmd_check(a):
         floor = a.floor if a.floor is not None else 0
     nbad = 0
     for where, st in items:
-        why = problems(st, floor, a.pw_min)
+        why = problems(st, floor, a.pw_min, a.allow_overlap)
         nbad += bool(why)
         print("%-18s %-8s %s" % (where, "ILLEGAL" if why else "ok", json.dumps(st, separators=(",", ":"))))
         if a.verbose or why:
@@ -379,7 +443,9 @@ def cmd_check(a):
                 pass
         for w in why:
             print("    - %s" % w)
-    print("%d of %d steps legal (floor %d mV, 47 us per PMBus write, push2 release rule)" % (len(items) - nbad, len(items), floor))
+    print("%d of %d steps legal (floor %d mV, 47 us per PMBus write, %s)" % (
+        len(items) - nbad, len(items), floor,
+        "push3: writes across the release allowed" if a.allow_overlap else "push2 release rule"))
     return 1 if nbad else 0
 
 
@@ -542,7 +608,8 @@ def parse_run_shotlines(lines):
         shots.append({"n": int(f["n"]), "first": f.get("first") == "1", "after_park": f.get("after_park") == "1",
                       "stall": f.get("stall") == "1", "kind": kind, "v": int(f["v"]), "td": int(f["td"]),
                       "np": int(f["np"]), "pw": int(f["pw"]), "vr": int(f["vr"]), "fast": int(f["fast"]),
-                      "delay": int(f["delay"]), "gap": int(f["gap"]), "s1": int(f["s1"]), "regs": regs,
+                      "delay": int(f["delay"]), "gap": int(f["gap"]), "s1": int(f["s1"]), "tv": int(f.get("tv", "0")),
+                      "regs": regs,
                       "out": m.group(2)})
     return shots
 
@@ -649,6 +716,8 @@ def geometry_of(key):
 
 def phase_of(key):
     np_, pw, gap, vr, fast, v, s1 = key
+    if np_ == 1 and -W < s1 + pw <= 0:
+        return "overlap"     # restore write in flight across the release (push3)
     if np_ is not None and np_ >= 2:
         return "train"
     if s1 > 0:
@@ -1187,6 +1256,13 @@ def cmd_run(a):
               "(a tip moves the rest to new boots).")
         return 0
     os.makedirs(logdir, exist_ok=True)
+    runlog = open(os.path.join(logdir, "run.log"), "a")
+
+    def rl(line):
+        runlog.write(line + "\n")
+        runlog.flush()
+    rl("######## RUN %s: %s, %d steps, card %s %s" % (plan.get("phase"), plan.get("label"), len(flat), a.card,
+                                                     _dt.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")))
     stop = None
     while pos < len(flat):
         if os.path.exists(stop_file):
@@ -1200,6 +1276,8 @@ def cmd_run(a):
         log = os.path.join(logdir, "boot-%02d.log" % boots)
         env["BOOTRUN_LOG"] = log
         print("######## boot %d: plan steps %d..%d %s" % (boots, pos, pos + n - 1, _dt.datetime.now().strftime("%H:%M:%S")), flush=True)
+        rl("######## boot %d: plan steps %d..%d of %d %s" % (boots, pos, pos + n - 1, len(flat),
+                                                          _dt.datetime.now().strftime("%H:%M:%S")))
         p = subprocess.run(["bash", bootrun, a.card, json.dumps(seq, separators=(",", ":"))], env=env,
                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         out = p.stdout
@@ -1208,6 +1286,8 @@ def cmd_run(a):
         for ln in out.splitlines():
             if re.match(r"^(SHOT .*kind=(?!under)|TIPPED|RESULT|>>> |HOLD|STOP|cell |.*FAILED)", ln):
                 print("  " + ln[:220])
+            if re.match(r"^(TIPPED|RESULT|>>> |HOLD|STOP|.*FAILED)", ln):
+                rl(ln[:300])
         what, idx, text = classify_boot(out, p.returncode)
         if what == "done":
             pos += n
@@ -1240,6 +1320,9 @@ def cmd_run(a):
             what, "unknown outcome: %s" % (text or what))
         break
     print("RUN: %s after %d boots. Logs: %s" % ("stopped: " + stop if stop else "plan done", boots, logdir))
+    rl("######## RUN %s after %d boots %s" % ("stopped: " + stop if stop else "done", boots,
+                                             _dt.datetime.now().strftime("%H:%M:%S")))
+    runlog.close()
     if stop and stop.startswith("GOLDILOCKS"):
         print("RUN: the card is held in the goldilocks state. Leave it as it is. Run your own active sense and "
               "write-window check, then your own reviewed burn tool, if you choose to. This tool never burns.")
@@ -1279,6 +1362,8 @@ def main(argv=None):
         sp.add_argument("--stallrun", type=int, default=8, help="stalls in a row that end a boot with --shoot-through (default 8)")
         sp.add_argument("--lostrun", type=int, default=8, help="lost shots in a row that end a boot (default 8)")
         sp.add_argument("--gfw-wait", type=float, default=5, help="seconds to poll a booting GFW before the stall read (default 5)")
+        sp.add_argument("--continue-sent0", action="store_true", help="SENT0_CONTINUE=1: log a clean DSOV-1 sentinel-0 frame and keep shooting")
+        sp.add_argument("--trace", action="store_true", help="TRACE=1: NVVDD trace per shot (debug firmware)")
         sp.add_argument("--out", help="write the plan JSON to this file (for `run`)")
         sp.add_argument("--json", action="store_true", help="print the plan JSON instead of the summary")
 
@@ -1323,11 +1408,24 @@ def main(argv=None):
     sp.add_argument("--np", type=int, default=1)
     sp.add_argument("--fast", type=int, default=1)
     sp.add_argument("--boots", type=int, default=1, help="fresh boots, one column each (default 1)")
+    sp.add_argument("--tv", type=int, default=0, help="stock VOUT write time, us (13th step field; default 0)")
+    sp.add_argument("--allow-overlap", action="store_true", help="push3: allow a write in flight across the release")
     plan_opts(sp, 10)
     sp.set_defaults(func=cmd_dwell)
 
+    sp = sub.add_parser("overlap", help="phase 6, push3 only: one long dip, restore write in flight across the release")
+    sp.add_argument("--v", default="388,381,375,369", help="depths, mV, shallow first (default 388,381,375,369)")
+    sp.add_argument("--s1", default="-177,-130", help="dip write starts, us (default -177,-130: falls near -130 and -83)")
+    sp.add_argument("--rises", default="0,3,7,11,17", help="when the rail is back up, us after the release (default 0,3,7,11,17)")
+    sp.add_argument("--no-anchor", dest="anchor", action="store_false", help="leave out the +48 us anchor (restore write at +1)")
+    sp.add_argument("--tv", type=int, default=171, help="stock VOUT write time, us, pinned for every shot (default 171)")
+    sp.add_argument("--fast", type=int, default=1)
+    plan_opts(sp, 1)
+    sp.set_defaults(func=cmd_overlap, vr=625)
+
     sp = sub.add_parser("check", help="legality of a step list (JSON or file) or a plan file")
     sp.add_argument("steps")
+    sp.add_argument("--allow-overlap", action="store_true", help="push3: writes in flight across the release are legal")
     sp.add_argument("--floor", type=int, default=None, help="floor, mV (default: the plan's FLOOR, else none)")
     sp.add_argument("--pw-min", type=int, default=W)
     sp.add_argument("-v", "--verbose", action="store_true", help="print each step's write timeline")

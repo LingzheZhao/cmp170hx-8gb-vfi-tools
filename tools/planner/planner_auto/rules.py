@@ -6,7 +6,8 @@
 3. pw below pw_min_us (default 47 us, the measured PMBus write time): the restore write would start while the dip
    write is still on the bus, and below 36 us the firmware silently clamps pw to 36.
 4. Release overlap: a PMBus write in flight at the PEX_RST release (t_cmd <= 0 < t_cmd + 47), computed on the
-   firmware's own timeline (dip at td - 117, restore at td - 117 + pw, pulse k at k * (pw + 150)).
+   firmware's own timeline (dip at td - 117, restore at td - 117 + pw, pulse k at k * (pw + 150)). push2 refuses
+   these shots; with {"allow_overlap": true} (push3 firmware only, docs/PUSH3.md) this rule is off.
 5. Overwritten: a VOUT step before the 600 mV setup write at reset_at never reaches the rail.
 6. Latch energy, learned from controller_off outcomes: a latch at code c with energy E = pulses x pw forbids every
    shot with code <= c + depth_margin_codes and energy >= E x (1 - energy_margin).
@@ -29,6 +30,7 @@ class Rules:
         self.depth_margin = int(lat.get("depth_margin_codes", 1))
         self.energy_margin = float(lat.get("energy_margin", 0.10))
         self.never = list(self.cfg.get("never") or [])
+        self.allow_overlap = bool(self.cfg.get("allow_overlap"))
         self.latches = self.learn_latches(records)
 
     def learn_latches(self, records):
@@ -86,7 +88,7 @@ class Rules:
         if chk["abort"]:
             why.append("firmware would abort: %s" % chk["abort"])
             return why
-        for t in chk["overlaps"]:
+        for t in ([] if self.allow_overlap else chk["overlaps"]):
             why.append("PMBus write at %d us is in flight across the PEX_RST release (47 us per write, queued)" % t)
         for t in chk["overwritten"]:
             why.append("VOUT step at %d us precedes the setup write at %d us" % (t, chk["resolved"]["reset_at"]))
@@ -106,8 +108,10 @@ class Rules:
         return not self.check(d)
 
     def describe(self):
-        lines = ["FLOOR %d mV (code >= %d), pw >= %d us, no PMBus write across the release, no overwritten dip"
-                 % (self.floor_mv, mv_to_code(self.floor_mv), self.pw_min)]
+        lines = ["FLOOR %d mV (code >= %d), pw >= %d us, %s, no overwritten dip"
+                 % (self.floor_mv, mv_to_code(self.floor_mv), self.pw_min,
+                    "PMBus writes across the release allowed (push3)" if self.allow_overlap
+                    else "no PMBus write across the release")]
         for lt in self.latches:
             lines.append("latch: code <= %d and pulses x pw >= %.0f  (learned from %s, %s)"
                          % (lt["code"] + self.depth_margin, lt["energy"] * (1 - self.energy_margin), lt["label"],

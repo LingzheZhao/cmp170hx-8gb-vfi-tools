@@ -4,7 +4,8 @@ without the dither pw floor and the SCL settle).
 Only the step list is modelled (times relative to the PEX_RST release at t = 0), not execution. It gives the resolved
 pw/gap and push2's refusal rules: a VOUT step before the 600 mV setup write, or a PMBus write in flight across the
 release, counting 47 us per write and queueing each write behind the previous one (push2 aborts such a shot; push1
-only printed a WARN, using the scheduled time).
+only printed a WARN, using the scheduled time; push3 runs it and names the write in a "glitch NOTE" line, see
+firmware/0011 and docs/PUSH3.md).
 """
 from .steps import RUNNER_DELAY_US, RUNNER_GAP_US
 from .vid import mv_to_code
@@ -87,8 +88,8 @@ def build(vd, td, vr, tr=-20, tv=0, fast=1, hold_ms=0, pulses=1, pw=0, gap=0, de
 
 
 def build_for_step(d):
-    """Timeline for a runner step dict (gap and delay from the step, default 150 / 117; t_revert 0)."""
-    return build(vd=d["v"], td=d["td"], vr=d["vr"], tr=d["t_restore"], tv=0, fast=d["fast"], hold_ms=d["hold"],
+    """Timeline for a runner step dict (gap and delay from the step, default 150 / 117; tv from the step, default 0)."""
+    return build(vd=d["v"], td=d["td"], vr=d["vr"], tr=d["t_restore"], tv=int(d.get("tv") or 0), fast=d["fast"], hold_ms=d["hold"],
                  pulses=d["pulses"], pw=d["pw"], gap=d.get("gap", RUNNER_GAP_US),
                  delay=d.get("delay", RUNNER_DELAY_US), revert=d["revert"])
 

@@ -187,6 +187,8 @@ def base_env(a):
            "SHOTCAP": 450}
     if getattr(a, "continue_sent0", False):
         env["SENT0_CONTINUE"] = 1
+    if getattr(a, "poison_reset", False):
+        env["POISON_RESET"] = 1
     if getattr(a, "trace", False):
         env["TRACE"] = 1
     return env
@@ -1363,6 +1365,7 @@ def main(argv=None):
         sp.add_argument("--lostrun", type=int, default=8, help="lost shots in a row that end a boot (default 8)")
         sp.add_argument("--gfw-wait", type=float, default=5, help="seconds to poll a booting GFW before the stall read (default 5)")
         sp.add_argument("--continue-sent0", action="store_true", help="SENT0_CONTINUE=1: log a clean DSOV-1 sentinel-0 frame and keep shooting")
+        sp.add_argument("--poison-reset", action="store_true", help="POISON_RESET=1: clear a FUSECTRL poison in-boot with one 100 ms PEX_RST once GFW is ready (docs/RUNNER.md)")
         sp.add_argument("--trace", action="store_true", help="TRACE=1: NVVDD trace per shot (debug firmware)")
         sp.add_argument("--out", help="write the plan JSON to this file (for `run`)")
         sp.add_argument("--json", action="store_true", help="print the plan JSON instead of the summary")

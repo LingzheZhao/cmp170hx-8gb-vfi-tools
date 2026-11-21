@@ -163,6 +163,10 @@ class LegalityTest(unittest.TestCase):
             rc, out = hunt("check", path)
             self.assertEqual(rc, 0, out)
 
+    def test_poison_reset_option(self):
+        self.assertEqual(plan_of("init", "--poison-reset")["env"]["POISON_RESET"], 1)
+        self.assertNotIn("POISON_RESET", plan_of("init")["env"])
+
     def test_warmup_options(self):
         p = plan_of("init", "--warmup", "[369,-60,3,198,750,1]")
         self.assertEqual(p["warmup"], [369, -60, 3, 198, 750, 1, 1, 0, -20, 0, 117, 150])

@@ -33,7 +33,7 @@ CELL3 = STD + [3]
 def run(seq, shots, **env):
     with tempfile.TemporaryDirectory() as tmp:
         log = os.path.join(tmp, "events")
-        e = {k: v for k, v in os.environ.items() if not k.startswith(("FAKE_", "REPEAT", "SENTINEL", "SENT0_", "FLOOR", "RETRAIN", "SBR", "PARK_EACH", "LOSTRUN", "VFI_", "BAD0_", "TRACE",
+        e = {k: v for k, v in os.environ.items() if not k.startswith(("FAKE_", "REPEAT", "SENTINEL", "SENT0_", "FLOOR", "RETRAIN", "SBR", "PARK_EACH", "LOSTRUN", "VFI_", "POISON_", "BAD0_", "TRACE",
                                                                      "LOST_NOPARK", "PARTIAL_CONTINUE", "SHOOT_THROUGH", "STALLRUN", "GFW_WAIT", "CELLLOST", "SHOTCAP"))}
         e.update(FAKE_LOG=log, FAKE_SHOTS=",".join(shots), FLOOR="381", VFI_BDF="0000:05:00.0", VFI_TRACE_DIR=tmp)
         e.update({k: str(v) for k, v in env.items()})
@@ -507,6 +507,39 @@ class RunnerStallAndRecoveryTest(unittest.TestCase):
         self.assertEqual(shot_lines(out)[0]["kind"], "compass")
         rc, out, ev = run([STD], "k")                                     # single mode stops at it
         self.assertEqual(rc, 10, out)
+
+    def test_poison_reset_clears_a_fusectrl_poison_and_goes_on(self):
+        rc, out, ev = run([CELL3], "Ruu", POISON_RESET=1)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("poison reset (100 ms PEX_RST): healthy_locked", out)
+        self.assertEqual(ev.count("SER r"), 1)
+        self.assertEqual(len(shots(ev)), 3)
+        r = ev.index("SER r")
+        self.assertEqual([x for x in bar0_reads(ev[:r]) if x == GFW][-1:], [GFW])   # GFW read before the pulse (rule 2)
+        rc, out, ev = run([CELL3], "Ruu")                                  # default off: the poison ends the boot
+        self.assertEqual(rc, 10, out)
+        self.assertNotIn("SER r", ev)
+        self.assertNotIn("poison reset", out)
+
+    def test_poison_reset_that_does_not_recover_still_ends_the_boot(self):
+        rc, out, ev = run([CELL3], "Quu", POISON_RESET=1)
+        self.assertEqual(rc, 10, out)
+        self.assertIn("poison reset (100 ms PEX_RST): poisoned", out)
+        self.assertEqual(len(shots(ev)), 1)
+        rc, out, ev = run([CELL3], "Tuu", POISON_RESET=1, GFW_WAIT=0.5)   # rule 2: no pulse while GFW is booting
+        self.assertEqual(rc, 10, out)
+        self.assertIn("GFW not ready (0x00000101): no reset (rule 2)", out)
+        self.assertNotIn("SER r", ev)
+        for code in ("h", "o"):                                           # hidden poison and poisoned/over0: no pulse
+            with self.subTest(code=code):
+                rc, out, ev = run([CELL3], code + "uu", POISON_RESET=1)
+                self.assertNotIn("SER r", ev)
+
+    def test_hold_after_a_poison_reset_is_noted(self):
+        rc, out, ev = run([CELL3], "Rgu", POISON_RESET=1)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("note: this boot had 1 poison reset(s) before this hold", out)
+        self.assertIn(">>> GOLDILOCKS HELD", out)
 
     def test_lost_nopark_sends_one_reset_pulse_and_needs_a_healthy_read(self):
         rc, out, ev = run([CELL3], "vuu", LOST_NOPARK=1)

@@ -39,6 +39,9 @@ OUTCOMES = {
     "k": [{0x820070: 0x57}],                                         # compass: DSOV 1, CRC 0x57, full mask
     "v": None,                                                       # lost; healthy after one 'r' pulse
     "V": None,                                                       # lost; DSOV poisoned after the 'r' pulse
+    "R": [{0x820000: 0xBADF510E}],                                   # FUSECTRL poison; healthy after one 'r' pulse
+    "Q": [{0x820000: 0xBADF510E}],                                   # FUSECTRL poison that survives the 'r' pulse
+    "T": [{0x820000: 0xBADF510E, 0x118234: 0x101}],                  # FUSECTRL poison while GFW keeps booting
     # release-timing codes (MISTIMED): registers as under unless noted
     "L": [{}], "F": [{}], "N": [{}], "W": [{}],
     "G": [{0x820084: 0}], "K": None, "X": [{0x820084: 0xBADF1701}], "P": [{0x820084: 0, 0x8200FC: 0xFFFFFEFE}],
@@ -47,6 +50,8 @@ OUTCOMES = {
 }
 # Lost codes whose link comes back after an 'r' (100 ms PEX_RST) pulse, with these reads.
 RECOVER = {"v": [{}], "V": [{0x820084: 0xBADF1701}]}
+# Poison codes and their reads after an 'r' pulse (POISON_RESET).
+POISON_RECOVER = {"R": [{}], "Q": [{0x820000: 0xBADF510E}]}
 RELEASE = {"L": "release_at=9 scheduled=0 via=alarm", "F": "release_at=0 scheduled=0 via=fallback", "N": None,
            "K": "release_at=10 scheduled=0 via=alarm", "G": "release_at=9 scheduled=0 via=alarm",
            "X": "release_at=10 scheduled=0 via=alarm", "P": "release_at=9 scheduled=0 via=alarm"}
@@ -76,6 +81,8 @@ def link_up():
 
 def bar0_value(offset):
     looks = OUTCOMES[cur[0]]
+    if reset_seen[0] and cur[0] in POISON_RECOVER:
+        looks = POISON_RECOVER[cur[0]]
     if looks is None:
         looks = RECOVER[cur[0]]
     regs = dict(HEALTHY)

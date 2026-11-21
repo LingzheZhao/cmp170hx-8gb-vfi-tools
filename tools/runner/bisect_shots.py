@@ -50,6 +50,12 @@ Environment:
   LOST_NOPARK=1        cell mode: no park after a lost shot; one 100 ms PEX_RST pulse ('r'), then the link must
                        come back with a healthy locked read (FUSECTRL idle, DSOV 1, CRC 0x55, full mask, sentinel),
                        or the boot ends (exit 10). On the lab's bench the park's hand-back left BAR0 dead.
+  POISON_RESET=1       cell mode, opt-in: after a FUSECTRL poison (0xBADF/0xBAD0), poll GFW for up to GFW_WAIT
+                       (reads only: rule 2 forbids r while the GFW boot status is 0x01), then one 100 ms PEX_RST
+                       pulse ('r') at the stock rail and the same healthy locked read as LOST_NOPARK. Healthy: the
+                       boot goes on. Anything else ends the boot (exit 10) as before. Hidden poison and the
+                       readable poisoned/over0 frame are not reset. On the lab's card C a sticky 0xBADF510E
+                       cleared this way every time (about 6 s instead of a power cycle).
   PARTIAL_CONTINUE=1   cell mode: a readable DSOV 0 frame that is not goldilocks is logged and shooting goes on
                        (default: held, exit 13). Nothing is ever sensed or written by this runner.
   SENT0_CONTINUE=1     opt-in: a clean DSOV 1 frame whose sentinel reads exactly 0 (every other register healthy, an
@@ -64,7 +70,8 @@ Environment:
   BAD0_FOLLOWUP=1      log only: after a 0xBAD0 FUSECTRL read, read FUSECTRL again 3 s later (and the passive set
                        if it is back at idle); the outcome is not changed
   RETRAIN, SBR         refused: no link retrain or secondary bus reset during a campaign
-Poison (0xBADF/0xBAD0, hidden poison) and a controller latch (STATUS_WORD OFF bit, READ_VOUT below 500 mV) always
+Poison (0xBADF/0xBAD0, hidden poison; a FUSECTRL poison only without POISON_RESET=1) and a controller latch
+(STATUS_WORD OFF bit, READ_VOUT below 500 mV) always
 end the boot: power cycle before the next shot.
 Exit codes: 0 sequence done or goldilocks held, 2 usage, firmware, unlock readback or a step the firmware refused,
 7 park failed before a step, 9 controller off or unsafe baseline (power cycle), 10 tipped, 11 nack or failed writes
@@ -258,6 +265,33 @@ PARTIAL_CONTINUE = os.environ.get("PARTIAL_CONTINUE") == "1"
 SENT0_CONTINUE = os.environ.get("SENT0_CONTINUE") == "1"
 STALL_THROUGH = os.environ.get("SHOOT_THROUGH_STALLS") == "1"
 STALLRUN = int(os.environ.get("STALLRUN", "8")); stallrun = [0]
+POISON_RESET = os.environ.get("POISON_RESET") == "1"; npreset = [0]
+
+
+def poison_reset(card):
+    """POISON_RESET: wait (reads only) for GFW to be ready, one 100 ms PEX_RST pulse, then the passive set. Returns the
+    passive state ('healthy_locked' means the boot may go on) or why no reset was sent."""
+    try:
+        g_ = None
+        if restore(BDF, wait_s=RESTORE_WAIT):
+            with Bar0(BDF) as bar:
+                g_ = bar.rd32(0x118234)
+                for _ in range(int(GFW_WAIT * 4)):
+                    if bad(g_) or (g_ & 0xFF) == 0xFF: break
+                    time.sleep(0.25); g_ = bar.rd32(0x118234)
+        if g_ is None: return "config not restored before the reset"
+        if bad(g_) or (g_ & 0xFF) != 0xFF: return "GFW not ready (0x%08x): no reset (rule 2)" % g_
+        rr = card.cmd("r", 0.3, total=2.0, until="released")
+        if "released" not in (rr or ""): return "no 'released' reply to r"
+        if not restore(BDF, wait_s=3.0): return "link down"
+        with Bar0(BDF) as bar:
+            o2 = look(bar)
+            for _ in range(int(GFW_WAIT * 4)):
+                if o2["state"] != "booting": break
+                time.sleep(0.25); o2 = look(bar)
+        return o2["state"]
+    except Exception as e:
+        return "reset failed: %s" % e
 fired = [0]; parked_before = [False]; last_stall = [False]
 if os.environ.get("RETRAIN", "0") != "0" or os.environ.get("SBR", "0") != "0":
     print("STOP: RETRAIN and SBR are not allowed during a campaign (no setpci retrain, no secondary bus reset)"); sys.exit(2)
@@ -407,6 +441,8 @@ if True:
                 if mistimed and out in ("under", "GOLDILOCKS"):
                     print("   observed, not scored: %s" % fmt_obs(o), flush=True)
                     out = "MISTIMED (%s; observed %s)" % (mistimed, out)
+                if out == "GOLDILOCKS" and npreset[0]:
+                    print("   note: this boot had %d poison reset(s) before this hold" % npreset[0], flush=True)
                 if out == "GOLDILOCKS":
                     shot("goldilocks", regs, out)
                     print("step %d v=%d td=%d pw=%d vr=%d f=%d: GOLDILOCKS passive candidate" % (i, v, td, pw, vr, fs)); print(">>> GOLDILOCKS HELD (%s) v=%d td=%d (passive candidate; validate it actively before anything else)" % (TAG, v, td)); tr_dump(); sys.exit(0)
@@ -473,6 +509,14 @@ if True:
                 if nshots[0] >= SHOTCAP:
                     print("cell %d (cut) v=%d td=%d np=%d pw=%d vr=%d: %s" % (i, v, td, np_, pw, vr, c_), flush=True); ended[0] = "SHOT CAP %d reached" % SHOTCAP; break
                 continue
+            if POISON_RESET and out.startswith("poisoned "):
+                hr = poison_reset(card)
+                print("   poison reset (100 ms PEX_RST): %s" % hr, flush=True)
+                if hr == "healthy_locked":
+                    npreset[0] += 1
+                    if nshots[0] >= SHOTCAP:
+                        print("cell %d (cut) v=%d td=%d np=%d pw=%d vr=%d: %s" % (i, v, td, np_, pw, vr, c_), flush=True); ended[0] = "SHOT CAP %d reached" % SHOTCAP; break
+                    continue
             why = ("%d lost in a row" % lostrun[0]) if ck == "lost" else out
             print("TIPPED at step %d shot %d (v=%d td=%d pw=%d vr=%d f=%d): %s. Power cycle (%d shots this boot)" % (i, k, v, td, pw, vr, fs, why, nshots[0]))
             tr_dump()

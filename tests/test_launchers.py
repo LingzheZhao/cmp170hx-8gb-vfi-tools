@@ -370,5 +370,22 @@ class BootrunTest(unittest.TestCase):
         self.assertIn("POWEROFF", logs["ssh.log"])
 
 
+class GateTest(unittest.TestCase):
+    """bootrun.sh's temperature gate, run on its own with a temperature that bounces one ADC step after passing."""
+    def test_gate_uses_the_reading_that_passed(self):
+        src = open(os.path.join(RUNNER_DIR, "bootrun.sh")).read()
+        gate = src[src.index("t0=$(date +%s); while"):src.index('echo "START temp_raw=')]
+        with tempfile.TemporaryDirectory() as d:
+            vals = os.path.join(d, "vals")
+            with open(vals, "w") as f:
+                f.write("380\n386\n382\n")
+            script = ('TCAP=30; TMIN=385; TSTART=410\n'
+                      'temp(){ v=$(head -1 %s); sed -i 1d %s; echo "$v"; }\n'
+                      'sleep(){ :; }\n%s\necho "START temp_raw=$v"\n' % (vals, vals, gate))
+            p = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=30)
+        self.assertIn("START temp_raw=386", p.stdout, p.stdout + p.stderr)
+        self.assertNotIn("TEMP GATE FAILED", p.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

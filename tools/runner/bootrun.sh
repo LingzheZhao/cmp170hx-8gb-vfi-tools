@@ -60,7 +60,7 @@ ssh "$H" "mkdir -p $(printf %q "$BENCH_DIR")" && scp -q "$RUNNER" "$H:$BENCH_DIR
   && scp -q "$HERE/park.py" "$HERE/preflight.py" "$TOOLS/vfi_snap.py" "$TOOLS/vfi_common.py" "$H:$BENCH_DIR/" \
   || { echo "RUNNER TRANSFER FAILED: stop"; exit 8; }
 L=${BOOTRUN_LOG:-${LOG_DIR:-.}/bootrun-$CARD.last}; mkdir -p "$(dirname "$L")"
-XENV="REPEAT=${REPEAT:-1} SHOTCAP=${SHOTCAP:-450} LOSTRUN=${LOSTRUN:-8} RESTORE_WAIT=${RESTORE_WAIT:-8.0} CELLLOST=${CELLLOST:-0} CLASSIFY_WRITE=${CLASSIFY_WRITE:-0} SENTINEL=${SENTINEL:-0x820410} BAD0_FOLLOWUP=${BAD0_FOLLOWUP:-0} GFW_WAIT=${GFW_WAIT:-5} LOST_NOPARK=${LOST_NOPARK:-0} PARTIAL_CONTINUE=${PARTIAL_CONTINUE:-0} SHOOT_THROUGH_STALLS=${SHOOT_THROUGH_STALLS:-0} STALLRUN=${STALLRUN:-8} SENT0_CONTINUE=${SENT0_CONTINUE:-0} SENTINEL_EXPECT=$SENTINEL_EXPECT"
+XENV="REPEAT=${REPEAT:-1} SHOTCAP=${SHOTCAP:-450} LOSTRUN=${LOSTRUN:-8} RESTORE_WAIT=${RESTORE_WAIT:-8.0} CELLLOST=${CELLLOST:-0} CLASSIFY_WRITE=${CLASSIFY_WRITE:-0} SENTINEL=${SENTINEL:-0x820410} BAD0_FOLLOWUP=${BAD0_FOLLOWUP:-0} GFW_WAIT=${GFW_WAIT:-5} LOST_NOPARK=${LOST_NOPARK:-0} PARTIAL_CONTINUE=${PARTIAL_CONTINUE:-0} SHOOT_THROUGH_STALLS=${SHOOT_THROUGH_STALLS:-0} STALLRUN=${STALLRUN:-8} SENT0_CONTINUE=${SENT0_CONTINUE:-0} POISON_RESET=${POISON_RESET:-0} SENTINEL_EXPECT=$SENTINEL_EXPECT"
 ssh "$H" "bash -s -- $(printf '%q ' "$TAG" "$SEQ" "$GPC" "$SMC" "$FLOOR" "$TMIN" "$TCAP" "$TRACE" "$PARK_EACH" "$XENV" "${RUNTO:-900}" "$BENCH_DIR" "$BENCH_PY" "${BENCH_TASKSET:-}" "$PORT" "$CARD_BDF" "${GLITCH_CMDLINE:-}" "${MASK_PCIEHP:-0}" "${TSTART:-99999}")" <<'R' | tee "$L"
 TAG=$1; SEQ=$2; GPC=$3; SMC=$4; FLOOR=$5; TMIN=$6; TCAP=$7; TRACE=$8; PARK_EACH=$9; XENV=${10}; RUNTO=${11}
 D=${12}; PY=${13}; TS=${14}; PORT=${15}; BDF=${16}; CMDW=${17}; MASK=${18}; TSTART=${19:-99999}
@@ -107,7 +107,7 @@ grep -q "GPC dis/def/st=$GPC/" /tmp/vfi-snap.out && grep -q "$SMC" /tmp/vfi-snap
 t0=$(date +%s); while [ $(( $(date +%s) - t0 )) -lt "$TCAP" ]; do v=$(temp)
   echo "   gate temp_raw=${v:-unreadable} want [$TMIN, $TSTART] $(date +%H:%M:%S)"
   [ -n "$v" ] && [ "$v" -ge "$TMIN" ] && [ "$v" -le "$TSTART" ] && break; sleep 5; done
-v=$(temp)
+# the check uses the reading that passed (a second read could bounce one ADC step out of the band)
 if ! { [ "$v" -ge "$TMIN" ] && [ "$v" -le "$TSTART" ]; } 2>/dev/null; then
   echo "TEMP GATE FAILED: temp_raw ${v:-unreadable} did not reach TMIN $TMIN (and stay at or below TSTART $TSTART) within TCAP ${TCAP}s: no shot"; exit 16; fi
 echo "START temp_raw=$v $(date +%H:%M:%S)"

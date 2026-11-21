@@ -4,17 +4,28 @@ Bench tools and firmware fixes for the Pico voltage-glitch ("goldilocks") method
 (`10de:20c2`), built on [dalzyu/pico-ga100vfi](https://github.com/dalzyu/pico-ga100vfi).
 
 With this glitch setup, and a separate burn step that is not part of this repository, the lab finished seven
-8 GB cards in November 2026: compute from 70 to 122, 122, 120, 118 and 108 SMs (126, 126, 124, 122 and 112 with the
-RECONFIG override) and, on 2026-11-21, card E from 70 to 106 (ceiling 110) and card C from 70 to 120 (ceiling 124), the 80 GB memory layout, and PCIe fuses
-that advertise 2.5 to 16 GT/s, all read back after a cold boot. The last two, cards G and H, were finished on 2026-11-20 by two different routes: card G with the community
-pulse train, card H, where that train did not work, by mapping where the glitch lands in the GPU's boot and then
-slowing the rail's fall. [`docs/SWEET_SPOT.md`](docs/SWEET_SPOT.md) turns both into one strategy, and
-[`tools/hunter/goldilocks_hunt.py`](tools/hunter/goldilocks_hunt.py) plans, runs and reads it back for a person or
-an LLM agent. Card E, which went from under straight to link loss or a skipped fuse check on every one of those
-shapes, needed one more thing: firmware that lets a PMBus write run across the reset release (push3,
-[`docs/PUSH3.md`](docs/PUSH3.md)), so the rail can still be low at the release and come back up a few µs after it
-([`docs/OVERLAP_EDGE.md`](docs/OVERLAP_EDGE.md)). [`cimp`](docs/CIMP.md) puts the configuration, a live status panel
-and the hunter behind one command. The method, wiring, parts and results are on cmp.wiki:
+8 GB cards in November 2026. Compute went from 70 SMs to 122, 122, 120, 118 and 108 on the first five (126, 126, 124,
+122 and 112 with the RECONFIG override), and on 2026-11-21 to 106 on card E (ceiling 110) and 120 on card C (ceiling
+124). All seven have the 80 GB memory layout and PCIe fuses that advertise 2.5 to 16 GT/s, read back after a cold
+boot; cards E and C were then checked under a driver (81920 MiB, 110 and 124 SMs with the override). The cards fell
+to four routes:
+
+- **Card G:** the community pulse train.
+- **Card H:** where that train did not work, by mapping where the glitch lands in the GPU's boot and then slowing the
+  rail's fall ([`docs/SWEET_SPOT.md`](docs/SWEET_SPOT.md)).
+- **Card E:** it went from under straight to link loss or a skipped fuse check on every shape push2 can make. It
+  needed firmware that lets a PMBus write run across the reset release (push3, [`docs/PUSH3.md`](docs/PUSH3.md)), so
+  the rail can still be low at the release and come back up a few µs after it
+  ([`docs/OVERLAP_EDGE.md`](docs/OVERLAP_EDGE.md)).
+- **Card C:** one VID step shallower with a slow ramp, so its real NVVDD trough matched card E's winning 334 mV. Its
+  regulator undershoots the command by about 60 mV, so the shots that looked right on the command were too deep.
+  Mapping its poison edge took hundreds of shots; a 100 ms reset that clears a poisoned fuse controller in-boot
+  (`POISON_RESET`, [`docs/RUNNER.md`](docs/RUNNER.md)) made each poison cost seconds instead of a power cycle.
+
+[`tools/hunter/goldilocks_hunt.py`](tools/hunter/goldilocks_hunt.py) plans, runs and reads back the strategy for a
+person or an LLM agent, and [`cimp`](docs/CIMP.md) puts the configuration, a live status panel and the hunter behind
+one command. One-step dither (`revert` 2) is in the firmware too, but it did not finish a card: see
+[What moves the window](#what-moves-the-window). The method, wiring, parts and results are on cmp.wiki:
 
 - [Voltage-glitch unlock: lab method on a Pico 2 W](https://cmp.wiki/wiki/Voltage-glitch_unlock:_lab_method_on_a_Pico_2_W)
 - [Voltage-glitch unlock: lab results and fuse findings](https://cmp.wiki/wiki/Voltage-glitch_unlock:_lab_results_and_fuse_findings)
@@ -210,6 +221,14 @@ privilege mask stuck at `0xFFFFFEFE`; a sense on one of them poisoned the contro
   reached goldilocks in about 4,000 shots: it went from under straight to a crash at every depth and timing tried,
   with the fuse read and the lethal event inside the same few microseconds. Details on the results page.
 
+- **One-step dither (`revert` 2).** The firmware can step a dip between two adjacent VID codes, 6.25 mV apart, to
+  land between them: even pulses at `v_dip`, odd pulses one code shallower, no restore in between, each step at least
+  one 47 µs write (patch `0008`, [`docs/RUNNER.md`](docs/RUNNER.md)). On card E it ran in the form push2 allows, the
+  deep code first and the shallower one ending just before the release: every shot came back under. It moved no card
+  off its ladder and finished none. What worked between codes was timing on card E (push3) and the ramp on card C
+  (a slow ramp at the shallower code). push3 also makes a dither that holds the rail low across the release legal;
+  the lab has not run one on a card.
+
 ## Safety behavior
 
 - **Park before config reads.** A crashed GA100 under its own PWM-VID control asks for the ~0.3 V floor, and every
@@ -273,6 +292,9 @@ privilege mask stuck at `0xFFFFFEFE`; a sense on one of them poisoned the contro
   lines and `TSTART`, `POWER=manual`) are new: `cimp watch` was checked against the lab's real logs, including card
   E's winning run, and everything passes the offline tests; the configurator, `hunt run` and the launcher additions
   had not driven a bench in this form when published (2026-11-21).
+- `POISON_RESET` and the temperature-gate fix of 2026-11-21 follow the lab's bench patch, which cleared 64 of 64
+  poisons in one 129-shot boot on card C (card C's winning shot came before any reset). The published version passes
+  the offline tests and had not run on a card in this exact form when published (2026-11-21).
 - `tools/vfi_*.py` are cleaned-up, generic versions of earlier bench scripts. They pass the offline tests and had
   not run on a card in this form when published (2026-11-19).
 

@@ -4,6 +4,7 @@ __pycache__/
 # card-identifying output: never commit
 vfi-snaps/
 *.jsonl
+!tools/planner/samples/sample-ledger.jsonl
 traces*.json
 goldilocks.jsonl
 # bench settings name your hosts: never commit

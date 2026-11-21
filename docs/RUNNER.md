@@ -62,6 +62,19 @@ written (`docs/METHOD.md`, section 5). Order the steps from the weakest effect t
   100 ms `PEX_RST` pulse (the firmware's `r`, which must answer `released`), waits for the link and reads the card
   passively; it has to read healthy and locked (FUSECTRL idle, DSOV 1, CRC `0x55`, full mask, sentinel), or the boot
   ends (exit 10). This is how the lab shot cards G and H: on its bench the park's hand-back left BAR0 dead.
+- **Reset pulse after a poison** (`POISON_RESET=1`, cell mode, off by default): after a `0xBADF` or `0xBAD0` read at
+  FUSECTRL the runner first polls GFW for up to `GFW_WAIT`, reads only, because rule 2 of upstream pico-ga100vfi's
+  AGENTS.md forbids `r` while the GFW boot status is `0x01`. Once GFW is ready it sends one 100 ms `PEX_RST` pulse at
+  the stock rail and needs the same healthy locked read as `LOST_NOPARK` (FUSECTRL idle `0xE0040000`, GFW ready,
+  DSOV 1, CRC `0x55`, full mask, sentinel). Then the boot goes on and the log says `poison reset (100 ms PEX_RST):
+  healthy_locked`. Anything else, or a GFW that never finishes, ends the boot (exit 10) as before. Hidden poison and the
+  readable `poisoned/over0` frame are never reset. On the lab's card C a `0xBADF510E` poison was sticky (GFW finished
+  booting in under a second, FUSECTRL stayed poisoned for 15 s) and one pulse returned a full cold-boot match: 2 of 2
+  in standalone tests, then 64 of 64 in one 129-shot boot, about 6 s each instead of a power cycle. A glitch shot's
+  own 1 ms reset did not clear it. A goldilocks that comes later in a boot with resets is held as usual, after a
+  `note: this boot had N poison reset(s) before this hold` line; the burn tool's own active sense, write-window check
+  and readback still decide. The lab chose to burn on such holds; card C's burned shot came in a boot that had no
+  reset before it.
 - **Through partials** (`PARTIAL_CONTINUE=1`, cell mode): a readable DSOV-0 frame that is not goldilocks is logged
   and shooting goes on. Card G's goldilocks came two shots after such a frame. Nothing is sensed or written.
 - **Through stalls** (`SHOOT_THROUGH_STALLS=1`, cell mode, off by default): the next shot fires while GFW is still
@@ -129,7 +142,8 @@ before a step, 9 controller off or unsafe baseline, 10 tipped, 11 nack or failed
 
 Environment: `VFI_BDF` (required), `VFI_PORT`, `VFI_PARK`, `VFI_TRACE_DIR`, `FLOOR` (lowest dip, default 381 mV),
 `REPEAT`, `SHOTCAP`, `LOSTRUN`, `CELLLOST`, `RESTORE_WAIT`, `GFW_WAIT` (default 5 s), `SENTINEL` (0 turns it off),
-`SENTINEL_EXPECT`, `PARK_EACH=1`, `LOST_NOPARK=1`, `PARTIAL_CONTINUE=1`, `SHOOT_THROUGH_STALLS=1` with `STALLRUN`,
+`SENTINEL_EXPECT`, `PARK_EACH=1`, `LOST_NOPARK=1`, `POISON_RESET=1`, `PARTIAL_CONTINUE=1`, `SHOOT_THROUGH_STALLS=1` with
+`STALLRUN`,
 `TRACE=1` (NVVDD traces, debug firmware, NVVDD lead on), `BAD0_FOLLOWUP=1`. `RETRAIN` and `SBR`
 (link retrain, secondary bus reset) are refused. The runner never writes BAR0, so `CLASSIFY_WRITE` only matters to
 tools that call the patched `classify()`.
@@ -161,10 +175,12 @@ FLOOR=331 TMIN=360 TCAP=300 PARK_EACH=1 REPEAT=1 LOSTRUN=1 CELLLOST=1 BAD0_FOLLO
 7. **Identity**: `vfi_snap.py` must print the card's `GPC dis/def/st=<GPC>/` and `SMC` line from `bench.conf`. A
    different card stops the run.
 8. **Temperature gate**: wait until READ_TEMP1 (raw) reaches `TMIN`, for up to `TCAP` seconds; if it does not, no shot
-   is fired (`TEMP GATE FAILED`, exit 16).
+   is fired (`TEMP GATE FAILED`, exit 16). The check uses the reading that passed: a second read after the loop could
+   bounce one ADC step out of the band and fail the gate for nothing (fixed 2026-11-21).
 9. **Run** `bisect_shots.py` with a time limit (`RUNTO`) and the runner settings from the environment (`REPEAT`,
    `SHOTCAP`, `LOSTRUN`, `RESTORE_WAIT`, `CELLLOST`, `CLASSIFY_WRITE`, `SENTINEL`, `BAD0_FOLLOWUP`, `GFW_WAIT`,
-   `LOST_NOPARK`, `PARTIAL_CONTINUE`, `SHOOT_THROUGH_STALLS`, `STALLRUN`, `FLOOR`, `TRACE`, `PARK_EACH`); the card's
+   `LOST_NOPARK`, `POISON_RESET`, `PARTIAL_CONTINUE`, `SHOOT_THROUGH_STALLS`, `STALLRUN`, `FLOOR`, `TRACE`,
+   `PARK_EACH`); the card's
    `SENTINEL_EXPECT` comes from `bench.conf`. The remote half exits with the runner's status and the launcher passes
    it on.
 10. **Hold**: when a line starts with `>>> GOLDILOCKS HELD` and the runner exited 0, `bootrun.sh` runs `ON_HOLD` if it
@@ -205,7 +221,9 @@ and without a working park, poisoned FUSECTRL, DSOV and CRC, a busy FUSECTRL, hi
 holds, mistimed shots, no dip, controller off, refused and cut-off shots, the delay and gap fields, `BAD0_FOLLOWUP`,
 park hygiene and step validation; and the paths of 2026-11-21: stall reads (with poison found in one), stall holds,
 shoot-through with its cap, compass frames, `PARTIAL_CONTINUE`, `LOST_NOPARK` with and without a healthy readback,
-the sentinel rule for DSOV 0, and the SHOT lines. `tests/test_hunter.py` covers the hunter. With `GA100VFI_HOST` it also checks that the runner's copy of `observe()` matches
+the sentinel rule for DSOV 0, and the SHOT lines; and `POISON_RESET` (a poison cleared, one that is not, no pulse
+while GFW is still booting, none for hidden poison or `poisoned/over0`, the note before a later hold). `tests/test_hunter.py` covers the hunter. With `GA100VFI_HOST` it also checks that the runner's copy of `observe()` matches
 the patched `passive_snapshot.observe` on 6,000 random reads. `tests/test_launchers.py` runs `firstshot.sh` and
 `campaign.sh` against a fake `bootrun.sh`, and `bootrun.sh` against fake `ssh`, `scp`, `ping` and power tools with a
-`bench.conf` in a temp dir.
+`bench.conf` in a temp dir, and runs `bootrun.sh`'s temperature gate on its own with a reading that bounces after
+passing.

@@ -86,5 +86,14 @@ Try this when a card goes from under straight to link loss, CRC44 or over, with 
    and dwell. The temperature band matters as much as on any other edge: card E's hits came at 39 to 41 °C.
 6. **Hold rule unchanged:** only DSOV 0 + CRC `0x55` + PLM `0xffffffff`, then your own active sense and window check.
 
+## Card C: the same window, a different answer
+
+Card C ran the same scan on 2026-11-21. Two push3 overlap shots at 388 mV (restore write in flight across the
+release, rail back up about 27 µs after it, restore 625 and 588 mV) gave passive goldilocks frames, but the active
+sense poisoned the controller both times and nothing was written. The shot that burned was push2-legal: 394 mV with
+slow slew, restore write -47 to 0 µs, rail back up at the release, real trough 334 mV, the same depth as card E's
+hit. On card C the deciding knob was depth, not the overlap window: see
+[`SWEET_SPOT.md`](SWEET_SPOT.md#match-the-real-trough-across-cards-card-c).
+
 `cimp watch` shows the run live: phase, temperature with a fan cue, and every shot as light, CRC44, over, lost,
 under, poison or GOLDILOCKS ([`CIMP.md`](CIMP.md)).

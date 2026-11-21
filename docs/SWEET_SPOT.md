@@ -7,6 +7,9 @@ lands in the GPU's boot. This page turns both into one strategy, in order, with 
 `tools/hunter/goldilocks_hunt.py`, which plans each phase, runs it through `tools/runner/bootrun.sh` if you ask it to,
 and reads the logs back into a map.
 
+On 2026-11-21 card C added one more rule: compare cards by the real trough on the NVVDD probe, not by the commanded
+voltage ([Match the real trough across cards](#match-the-real-trough-across-cards-card-c)).
+
 The tool never senses, arms or burns fuses. When the runner holds a goldilocks frame the tool stops and tells you so;
 the active sense, the write-window check and any burn are yours, with your own reviewed tools.
 
@@ -25,7 +28,7 @@ the active sense, the write-window check and any burn are yours, with your own r
 | compass | a finished boot with DSOV 1, a full mask and a CRC other than `0x55` |
 | partial | DSOV 0 that is not goldilocks |
 | over | DSOV 0 with CRC `0x00` or a mask that is not all ones (`0xFFFFFEFE`): too deep, never sense it |
-| poison | FUSECTRL or DSOV reads `0xBADFxxxx` (or `0xBAD0xxxx`): the fuse unit is gone until a power cycle |
+| poison | FUSECTRL or DSOV reads `0xBADFxxxx` (or `0xBAD0xxxx`): the fuse unit is gone until a power cycle, or a 100 ms reset with `POISON_RESET=1` ([`RUNNER.md`](RUNNER.md)) |
 | latch | the controller switched its output off (STATUS_WORD `0x2042`): power cycle |
 | sentinel | the fuse alias `0x820410` (`0x1` on a healthy boot of the lab's cards) |
 
@@ -60,7 +63,8 @@ After every phase, `goldilocks_hunt.py tally <logs>` prints the map (counts per 
 and the partial codes) and a "Next" block with the command for the next phase. The first shot of every boot is left
 out of the counts (below).
 
-**Shot budget.** Each poison or latch costs a power cycle (about 1.5 minutes on the lab's bench). Edges are 1 µs
+**Shot budget.** Each poison or latch costs a power cycle (about 1.5 minutes on the lab's bench); with
+`POISON_RESET=1` a FUSECTRL poison costs about 6 s instead (card C: 64 of 64 cleared in one boot). Edges are 1 µs
 sharp, so use 1 or 2 µs steps near an edge, 3 or 4 shots per cell, and never count the first shot of a boot.
 
 ## Worked example 1: card G, the community recipe
@@ -158,6 +162,36 @@ DISABLE_GEN3_SPEED 0, LnkCap2 2.5 to 16 GT/s.
 The hunter's commands for the same path: `train` (step 1), `readmap --v 375` (3), `init` (5), `slow --v 375` (7).
 Fed card H's logs phase by phase, `tally` names exactly these next steps.
 
+## Match the real trough across cards (card C)
+
+Card C was finished on 2026-11-21, the seventh card. Its regulator undershoots the command by about 58 to 61 mV on the
+NVVDD probe; card E's by about 40 to 47 mV. So the same commanded voltage is not the same dip on two cards:
+
+| Card C, single long dip | Real trough | Outcome |
+|---|---|---|
+| 369 mV, fast slew | about 310 mV | lost |
+| 375 mV, fast slew | about 315 mV | under, now and then lost |
+| 381 mV, fast slew | 321 to 322 mV | under at every rise time tried in the band; a few light frames (DSOV 1, clean blocks) when the card ran warmer, 40 to 41 °C |
+| 388 mV, fast slew | 327 to 331 mV | poison (FUSECTRL `0xBADF510E`); two passive goldilocks frames whose active sense poisoned the controller |
+| **394 mV, slow slew** | **334 mV** | **goldilocks; the sense passed; burned** |
+
+Card E's winning shot had a 334 mV trough too. At 388 mV card C was already deeper than that. Two push3 shots there
+(restore 625 and 588 mV, rail back up about 27 µs after the release) read as passive goldilocks frames, but the burn
+tool's active sense poisoned the controller both times and nothing was written. Afterwards PLM_f8 (`0x8200F8`) read
+`0xFFFFFFFE`: bit 0, host read access, had closed, and that is why FUSECTRL and EN_SW read `0xBADF510E`. The same
+sense on a normal cold card C passed, with and without EN_SW_OVERRIDE set first, so the controller itself was fine.
+One step shallower and with slow slew, `[394, -60, 1, 130, 625, 0, 1, 0, -20, 0, 117, 150, 171]` (dip write -177 to
+-130 µs, restore write -47 to 0 µs, a push2-legal shot), gave a 334 mV trough on the third shot of the first boot at
+38.6 °C. PLM_f8 read `0xFFFFFFFF` before the sense and after EN_SW_OVERRIDE, the sense gave CRC `0x55`, EFP 1 and
+DSOV 0, and 15 records burned with a test row first.
+
+- **Compare cards by the probe's trough, not by the commanded voltage.** Put the NVVDD lead on (`--trace`) and aim
+  at the trough depth that worked on another card.
+- **A passive goldilocks whose sense poisons is too deep.** Go one step shallower or slow the slew, not the other
+  way.
+- **Fast-slew single dips can be binary.** On card C they went under to lost inside one 6.25 mV step at every rise
+  time tried in the band, so slew was the knob that landed between the steps.
+
 ## Runner settings behind both cards
 
 `tools/runner/bisect_shots.py` has the lab's runner behaviour of 2026-11-20. The hunter's plans set the safe ones and
@@ -172,7 +206,8 @@ leave the others to you:
 | compass frames | always | logged as compass, not as lost, and the cell goes on |
 | `PARTIAL_CONTINUE=1` | off (`--continue-partials`) | keep shooting through readable DSOV-0 frames; card G's recipe |
 | `SHOOT_THROUGH_STALLS=1` | off (`--shoot-through`) | fire the next shot while GFW is stalled, `STALLRUN` stalls in a row at most |
-| poison, latch | always | end the boot: power cycle |
+| `POISON_RESET=1` | off (`--poison-reset`) | after a FUSECTRL poison: wait for GFW to be ready, one 100 ms `PEX_RST` pulse, then a healthy locked read or the boot ends |
+| poison (without `POISON_RESET`), latch | always | end the boot: power cycle |
 
 **Shoot-through breaks a rule.** Upstream pico-ga100vfi's AGENTS.md, rule 2: never `g`, `r`/`j` or FLR while GFW
 boot status is `0x01`; it can wedge the GFW boot sequencer. Both cards' maps were taken with shoot-through on, and a

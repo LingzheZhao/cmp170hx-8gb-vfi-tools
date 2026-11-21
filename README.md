@@ -3,9 +3,9 @@
 Bench tools and firmware fixes for the Pico voltage-glitch ("goldilocks") method on NVIDIA CMP 170HX 8 GB cards
 (`10de:20c2`), built on [dalzyu/pico-ga100vfi](https://github.com/dalzyu/pico-ga100vfi).
 
-With this glitch setup, and a separate burn step that is not part of this repository, the lab finished six
+With this glitch setup, and a separate burn step that is not part of this repository, the lab finished seven
 8 GB cards in November 2026: compute from 70 to 122, 122, 120, 118 and 108 SMs (126, 126, 124, 122 and 112 with the
-RECONFIG override) and, on 2026-11-21, card E from 70 to 106 (ceiling 110), the 80 GB memory layout, and PCIe fuses
+RECONFIG override) and, on 2026-11-21, card E from 70 to 106 (ceiling 110) and card C from 70 to 120 (ceiling 124), the 80 GB memory layout, and PCIe fuses
 that advertise 2.5 to 16 GT/s, all read back after a cold boot. The last two, cards G and H, were finished on 2026-11-20 by two different routes: card G with the community
 pulse train, card H, where that train did not work, by mapping where the glitch lands in the GPU's boot and then
 slowing the rail's fall. [`docs/SWEET_SPOT.md`](docs/SWEET_SPOT.md) turns both into one strategy, and
@@ -160,7 +160,7 @@ agent gets, the loop, the guard rails and what stays with people.
 | goldilocks | DSOV exactly 0, CRC `0x55`, privilege mask `0xFFFFFFFF`, FPF row readable (and the DSOV write-back, when `CLASSIFY_WRITE=1`) | the target state |
 | lost | no link after the shot | the GPU crashed; the next park or shot resets it |
 | nack | the voltage controller did not answer on I2C | seen only at crash-prone settings: a crashing GPU disturbs the shared I2C bus |
-| poisoned | FUSECTRL or DSOV `0xBADFxxxx` | the dip disturbed the fuse read itself; nothing else is read. It stays poisoned until a power cycle: end the boot |
+| poisoned | FUSECTRL or DSOV `0xBADFxxxx` | the dip disturbed the fuse read itself; nothing else is read. It stays poisoned until a power cycle, or until a 100 ms reset once GFW is ready with `POISON_RESET=1` ([`docs/RUNNER.md`](docs/RUNNER.md)); otherwise end the boot |
 | fuse unit error | a `0xBAD0xxxx` read (seen at FUSECTRL) | the fuse unit did not answer; nothing else is read. On one card about 1 to 2 % of shots at large delays, never on an exact repeat |
 | mistimed | the release was not 0 to 4 µs after t = 0 by the alarm, or a write crossed it | the shot is read but not scored; the runner stops |
 | no dip | the reply shows `pwd=0` or `e1` other than `0xc2fa` | the controller dropped the dip writes; the shot did not run |

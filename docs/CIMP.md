@@ -26,7 +26,8 @@ A panel redrawn every second (the clock in the header ticks, so you can see it i
 - **FAN**: a direct cue for whoever runs the fan by hand: fan DOWN a notch, fan UP, leave it, or "no live reading
   while the bench is off".
 - **The last eight shots** as words (light, light-PLM, CRC44, over, CRC fault, under, lost, POISON, GOLDILOCKS) with
-  depth, restore, delay and temperature, and a tally for the whole run.
+  depth, restore, delay and temperature, and a tally for the whole run. A poison the runner cleared with
+  `POISON_RESET=1` shows as "POISON, cleared by a 100 ms reset", and the RUN line counts poison resets.
 
 It reads only log files and pings the bench address while there is no log for the current boot (that is how it tells
 a power cycle from a booting bench). It never opens the Pico's serial port. Between boots no file on disk is live, so

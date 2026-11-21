@@ -1,6 +1,6 @@
 # Firmware and host patches for pico-ga100vfi
 
-Ten changes to [dalzyu/pico-ga100vfi](https://github.com/dalzyu/pico-ga100vfi), made against commit `e1ebd97`.
+Eleven changes to [dalzyu/pico-ga100vfi](https://github.com/dalzyu/pico-ga100vfi), made against commit `e1ebd97`.
 Apply them with `git am`:
 
 ```sh
@@ -17,12 +17,13 @@ debug builds, with no warnings.
 | 0003 | `fw=lab-psr1` | the firmware on its cards up to 2026-11-19 (debug build byte-identical) |
 | 0004 | `fw=lab-psr1-timing1` | the timing build, from 2026-11-20 (debug build byte-identical) |
 | 0008 | `fw=lab-psr1-push1` | push1, on one card on 2026-11-20 |
-| 0009 | `fw=lab-psr1-push2` | push2, on one card on 2026-11-20 (about 500 shots); the current firmware |
+| 0009 | `fw=lab-psr1-push2` | push2, on one card on 2026-11-20 (about 500 shots) |
+| 0011 | `fw=lab-psr1-push3` | push3, from 2026-11-21: card E's goldilocks; the current firmware |
 
 `-debug` is appended in the debug build. The lab's push1 and push2 builds arrange the unlock readback of patch 0007
 inside the stock unlock function; here it is a separate function after it, so the patched upstream file never
 carries the controller's unlock code in a diff. Behavior is the same; checksums differ from the lab's builds. The
-runner in `../tools/runner` needs push1 or push2 and is meant for push2.
+runner in `../tools/runner` needs push1, push2 or push3 and is meant for push2 or push3.
 
 ## 0001: restore the card's own VRM profile after each shot
 
@@ -163,6 +164,18 @@ Fail closed:
 `0xBAD0xxxx` value stops the read as poisoned (seen at FUSECTRL on one card with the link up, about 1 to 2 % of
 shots at large delays, never on an exact repeat), FUSECTRL must read exactly the idle `0xE0040000`, and GFW boot
 status must end in `0xFF`. Test: `host/test_passive_snapshot.py`.
+
+## 0011: push3, a PMBus write may run across the `PEX_RST` release
+
+push2 refused any shot with a PMBus write in flight at t = 0. The refusal is older than the alarm of `0006`/`0009`:
+when the step loop released `PEX_RST` itself, a write due at or just before t = 0 pushed the release late. Now the
+release is the alarm IRQ at the highest priority from SRAM, and PMBus writes run with interrupts on, so a write in
+flight cannot move it. push3 drops only that refusal: the first such write is named after the shot in a
+`glitch NOTE: push3:` line, `release_at` stays the proof of the release time (the runner scores only releases 0 to
+4 µs after t = 0 by the alarm), and the refusal of a VOUT step before the setup write is kept. Every shot push2
+accepts runs identically. This is what lets a long dip keep the rail low at the release and bring it back a few µs
+after it, the shot that finished card E. Details, the host simulation (`../tools/hostsim`, 90 of 90), the bench
+proof and a flashing trap: `../docs/PUSH3.md`.
 
 ## Not a firmware change: park and rescue
 

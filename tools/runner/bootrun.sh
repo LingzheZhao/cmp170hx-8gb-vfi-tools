@@ -8,11 +8,13 @@
 # the first shot that is not "under") -> on a ">>> GOLDILOCKS HELD" line with runner status 0: run ON_HOLD if set
 # (and NO_ON_HOLD is not 1), else stop and report the held state. Nothing here burns fuses.
 #
-# env: NOCYCLE=1 (use the current boot), FLOOR (mV), TMIN (raw READ_TEMP1), TCAP (s), OFFWAIT (s), POWER (wol|ipmi),
+# env: NOCYCLE=1 (use the current boot), FLOOR (mV), TMIN (raw READ_TEMP1), TSTART (raw, optional upper bound: the gate
+#      opens only inside [TMIN, TSTART]), TCAP (s), OFFWAIT (s), POWER (wol|ipmi|manual),
 #      RUNTO (s, run time limit), RUNNER (runner file to copy; default bisect_shots.py here), BOOTRUN_LOG (the run
 #      log; default $LOG_DIR/bootrun-<card>.last), NO_ON_HOLD=1 (never run ON_HOLD, whatever bench.conf says; the
 #      hunter sets it), and for the runner: TRACE, PARK_EACH, REPEAT, SHOTCAP, LOSTRUN, RESTORE_WAIT, CELLLOST,
-#      CLASSIFY_WRITE, SENTINEL, BAD0_FOLLOWUP, GFW_WAIT, LOST_NOPARK, PARTIAL_CONTINUE, SHOOT_THROUGH_STALLS, STALLRUN
+#      CLASSIFY_WRITE, SENTINEL, BAD0_FOLLOWUP, GFW_WAIT, LOST_NOPARK, PARTIAL_CONTINUE, SHOOT_THROUGH_STALLS, STALLRUN,
+#      SENT0_CONTINUE
 #      (SENTINEL_EXPECT comes from the card function)
 # Exit codes: 1 bench never came up, 2 usage or config, 3 host guard or preflight failed, 4 plan checksum failed or
 # mismatched, 5 identity mismatch, 6 not a fresh boot, 7 bench did not power off, 8 runner transfer failed,
@@ -58,10 +60,10 @@ ssh "$H" "mkdir -p $(printf %q "$BENCH_DIR")" && scp -q "$RUNNER" "$H:$BENCH_DIR
   && scp -q "$HERE/park.py" "$HERE/preflight.py" "$TOOLS/vfi_snap.py" "$TOOLS/vfi_common.py" "$H:$BENCH_DIR/" \
   || { echo "RUNNER TRANSFER FAILED: stop"; exit 8; }
 L=${BOOTRUN_LOG:-${LOG_DIR:-.}/bootrun-$CARD.last}; mkdir -p "$(dirname "$L")"
-XENV="REPEAT=${REPEAT:-1} SHOTCAP=${SHOTCAP:-450} LOSTRUN=${LOSTRUN:-8} RESTORE_WAIT=${RESTORE_WAIT:-8.0} CELLLOST=${CELLLOST:-0} CLASSIFY_WRITE=${CLASSIFY_WRITE:-0} SENTINEL=${SENTINEL:-0x820410} BAD0_FOLLOWUP=${BAD0_FOLLOWUP:-0} GFW_WAIT=${GFW_WAIT:-5} LOST_NOPARK=${LOST_NOPARK:-0} PARTIAL_CONTINUE=${PARTIAL_CONTINUE:-0} SHOOT_THROUGH_STALLS=${SHOOT_THROUGH_STALLS:-0} STALLRUN=${STALLRUN:-8} SENTINEL_EXPECT=$SENTINEL_EXPECT"
-ssh "$H" "bash -s -- $(printf '%q ' "$TAG" "$SEQ" "$GPC" "$SMC" "$FLOOR" "$TMIN" "$TCAP" "$TRACE" "$PARK_EACH" "$XENV" "${RUNTO:-900}" "$BENCH_DIR" "$BENCH_PY" "${BENCH_TASKSET:-}" "$PORT" "$CARD_BDF" "${GLITCH_CMDLINE:-}" "${MASK_PCIEHP:-0}")" <<'R' | tee "$L"
+XENV="REPEAT=${REPEAT:-1} SHOTCAP=${SHOTCAP:-450} LOSTRUN=${LOSTRUN:-8} RESTORE_WAIT=${RESTORE_WAIT:-8.0} CELLLOST=${CELLLOST:-0} CLASSIFY_WRITE=${CLASSIFY_WRITE:-0} SENTINEL=${SENTINEL:-0x820410} BAD0_FOLLOWUP=${BAD0_FOLLOWUP:-0} GFW_WAIT=${GFW_WAIT:-5} LOST_NOPARK=${LOST_NOPARK:-0} PARTIAL_CONTINUE=${PARTIAL_CONTINUE:-0} SHOOT_THROUGH_STALLS=${SHOOT_THROUGH_STALLS:-0} STALLRUN=${STALLRUN:-8} SENT0_CONTINUE=${SENT0_CONTINUE:-0} SENTINEL_EXPECT=$SENTINEL_EXPECT"
+ssh "$H" "bash -s -- $(printf '%q ' "$TAG" "$SEQ" "$GPC" "$SMC" "$FLOOR" "$TMIN" "$TCAP" "$TRACE" "$PARK_EACH" "$XENV" "${RUNTO:-900}" "$BENCH_DIR" "$BENCH_PY" "${BENCH_TASKSET:-}" "$PORT" "$CARD_BDF" "${GLITCH_CMDLINE:-}" "${MASK_PCIEHP:-0}" "${TSTART:-99999}")" <<'R' | tee "$L"
 TAG=$1; SEQ=$2; GPC=$3; SMC=$4; FLOOR=$5; TMIN=$6; TCAP=$7; TRACE=$8; PARK_EACH=$9; XENV=${10}; RUNTO=${11}
-D=${12}; PY=${13}; TS=${14}; PORT=${15}; BDF=${16}; CMDW=${17}; MASK=${18}
+D=${12}; PY=${13}; TS=${14}; PORT=${15}; BDF=${16}; CMDW=${17}; MASK=${18}; TSTART=${19:-99999}
 PYV="$TS $PY"
 stop(){ echo "$1: stop"; exit "$2"; }
 cd /tmp || exit 3
@@ -101,9 +103,13 @@ grep -q "PREFLIGHT OK" /tmp/vfi-pf.out || { echo "PREFLIGHT FAILED: stop"; tail 
 timeout 60 $PYV -E -s "$D/vfi_snap.py" --bdf "$BDF" --port "$PORT" --label preflight --outdir "$D/snaps" > /tmp/vfi-snap.out 2>&1
 grep -E "verdict|GPC dis" /tmp/vfi-snap.out
 grep -q "GPC dis/def/st=$GPC/" /tmp/vfi-snap.out && grep -q "$SMC" /tmp/vfi-snap.out && echo "IDENTITY OK: $TAG" || { echo "IDENTITY MISMATCH: stop"; exit 5; }
-t0=$(date +%s); while [ $(( $(date +%s) - t0 )) -lt "$TCAP" ]; do v=$(temp); [ -n "$v" ] && [ "$v" -ge "$TMIN" ] && break; sleep 15; done
+# one line per poll, so a watcher (tools/cimp/cimp.py watch) can show the card warming or cooling into the band
+t0=$(date +%s); while [ $(( $(date +%s) - t0 )) -lt "$TCAP" ]; do v=$(temp)
+  echo "   gate temp_raw=${v:-unreadable} want [$TMIN, $TSTART] $(date +%H:%M:%S)"
+  [ -n "$v" ] && [ "$v" -ge "$TMIN" ] && [ "$v" -le "$TSTART" ] && break; sleep 5; done
 v=$(temp)
-if ! [ "$v" -ge "$TMIN" ] 2>/dev/null; then echo "TEMP GATE FAILED: temp_raw ${v:-unreadable} did not reach TMIN $TMIN within TCAP ${TCAP}s: no shot"; exit 16; fi
+if ! { [ "$v" -ge "$TMIN" ] && [ "$v" -le "$TSTART" ]; } 2>/dev/null; then
+  echo "TEMP GATE FAILED: temp_raw ${v:-unreadable} did not reach TMIN $TMIN (and stay at or below TSTART $TSTART) within TCAP ${TCAP}s: no shot"; exit 16; fi
 echo "START temp_raw=$v $(date +%H:%M:%S)"
 echo "run env: $XENV timeout ${RUNTO}s"
 # shellcheck disable=SC2086

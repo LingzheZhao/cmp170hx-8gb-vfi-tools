@@ -9,6 +9,9 @@ BENCH_ADDR=                                  # what ping uses to see the host go
 
 # Power control. wol: OS poweroff, wait until the host stops answering ping, Wake-on-LAN.
 #                ipmi: OS poweroff, the BMC confirms it is off (hard power-off if a clean shutdown stalls), BMC power on.
+#                manual: OS poweroff, wait until the host stops answering ping, then wait for someone to press the
+#                        power button (MANUAL_WAIT seconds, default 600).
+# tools/cimp/cimp.py config can write this file for you from a CiMP profile (cimp config --write-bench-conf).
 POWER=${POWER:-wol}
 WOL_MAC=                                     # the bench NIC's MAC address
 WOL_BROADCAST="255.255.255.255"              # space-separated; add your subnet's broadcast address if needed
@@ -17,6 +20,7 @@ IPMI_USER=
 IPMI_PASSFILE=                               # a 0600 file that ipmitool -f reads the BMC login from
 IPMI_OPTS="-I lanplus"                       # some BMCs also need a cipher suite, e.g. "-I lanplus -C 17"
 OFFWAIT=${OFFWAIT:-15}                       # seconds with the host off before power on
+MANUAL_WAIT=${MANUAL_WAIT:-600}              # POWER=manual: how long to wait for the button
 
 # On the bench host
 BENCH_DIR=/opt/vfi                           # bootrun.sh copies bisect_shots.py, park.py, preflight.py,

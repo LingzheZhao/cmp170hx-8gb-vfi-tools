@@ -7,15 +7,17 @@ Never below FLOOR mV.
 
 Usage (root, on the glitch boot, card parked, with the patched ga100vfi package importable):
   VFI_BDF=0000:05:00.0 python3 -I bisect_shots.py '<tag>' '<SEQ json>'
-A step is [v_mV, td_us, pulses, pw_us, v_restore_mV, fast, reps, hold_ms, t_restore_us, revert, delay_us, gap_us].
+A step is [v_mV, td_us, pulses, pw_us, v_restore_mV, fast, reps, hold_ms, t_restore_us, revert, delay_us, gap_us,
+t_revert_us]. t_revert_us (tv, optional, default 0) is when the firmware writes the stock 787.5 mV VOUT after the train;
+pin it on overlap scans so only the restore edge moves (docs/OVERLAP_EDGE.md).
 Omitted tail fields default to pulses 3, pw 198, v_restore 750, fast 1, reps REPEAT, hold 0, t_restore -20, revert 0,
-delay 117, gap 150, which is the stock command byte for byte. fast 2..7, hold > 0, t_restore <= -1000 and revert 2
+delay 117, gap 150, tv 0, which is the stock command byte for byte. fast 2..7, hold > 0, t_restore <= -1000 and revert 2
 are firmware knobs (firmware/0008); revert 1 is refused because the NO DIP check needs E1 0xC2FA after the shot. The
 firmware uses td and delay only as td - delay: delay 330 at td -60 is the same dip as delay 117 at td -273. The log
 calls that difference s1, the time of the first dip write relative to the PEX_RST release.
 
-Needs push1 or push2 firmware (fw=lab-psr1-push1, fw=lab-psr1-push2; push2 releases the first shot of a boot on
-time). After each shot BAR0 is read passively (passive_snapshot.py rules, firmware/0004 and 0010: FUSECTRL first,
+Needs push1, push2 or push3 firmware (fw=lab-psr1-push1, -push2, -push3; push2 releases the first shot of a boot on
+time; push3 also runs a PMBus write that is in flight across the release, firmware/0011, docs/PUSH3.md). After each shot BAR0 is read passively (passive_snapshot.py rules, firmware/0004 and 0010: FUSECTRL first,
 stop at the first 0xBADF/0xBAD0 or bad read, no writes), then the SENTINEL fuse-alias register. With DSOV 1 the
 sentinel must equal this boot's pre-shot baseline; with DSOV 0 (option shadows not sensed, as in a real goldilocks)
 it may read 0, and only an error value counts. A shot whose reset release was not 0..4 us after t = 0 by the alarm,
@@ -50,6 +52,9 @@ Environment:
                        or the boot ends (exit 10). On the lab's bench the park's hand-back left BAR0 dead.
   PARTIAL_CONTINUE=1   cell mode: a readable DSOV 0 frame that is not goldilocks is logged and shooting goes on
                        (default: held, exit 13). Nothing is ever sensed or written by this runner.
+  SENT0_CONTINUE=1     opt-in: a clean DSOV 1 frame whose sentinel reads exactly 0 (every other register healthy, an
+                       init-phase partial) is logged as a SENT0 frame and the boot goes on; default: hidden poison.
+                       Error values and any other mismatch still stop the boot.
   SHOOT_THROUGH_STALLS=1  cell mode, opt-in, default off: fire the next shot while GFW is still stalled. This BREAKS
                        rule 2 of upstream pico-ga100vfi's AGENTS.md (never g, r/j or FLR while GFW boot status is
                        0x01): it can wedge the GFW boot sequencer. A clean host power cycle recovered every time on
@@ -146,7 +151,10 @@ def look(bar):
         try: r["SENTINEL"] = sv = bar.rd32(SENT)
         except OSError as e: o.update(state="unknown", reason="SENTINEL: %s" % e); return o
         dsov0 = r.get("DSOV") == 0
-        if bad(sv) or sv == 0xFFFFFFFF or (not dsov0 and (sv == 0 or (SENT_BASE[0] is not None and sv != SENT_BASE[0]))):
+        if SENT0_CONTINUE and sv == 0 and not dsov0 and o["state"] == "healthy_locked":
+            print("   SENT0 frame: DSOV=0x%08x CRC=0x%08x PLM=0x%08x sentinel 0 (init-phase partial; boot continues)" % (
+                r.get("DSOV", 0), r.get("CRC", 0), r.get("PLM", 0)), flush=True)
+        elif bad(sv) or sv == 0xFFFFFFFF or (not dsov0 and (sv == 0 or (SENT_BASE[0] is not None and sv != SENT_BASE[0]))):
             o.update(state="hidden_poison", reason="SENTINEL 0x%x: 0x%08x, boot baseline %s" % (
                 SENT, sv, "unset" if SENT_BASE[0] is None else "0x%08x" % SENT_BASE[0]))
     if o["state"] == "candidate" and SENT and "SENTINEL" not in r:
@@ -203,10 +211,10 @@ def kind_of(out):
 SHOT_REGS = ("FUSECTRL", "GFW", "DSOV", "CRC", "PLM", "SENTINEL")
 def shot_line(n, i, f, kind, regs, out, stall=False, after_park=False):
     """One line per fired shot for tools/hunter/goldilocks_hunt.py tally."""
-    v, td, np_, pw, vr, fs, hold, tr, rev, dly, gp = f
+    v, td, np_, pw, vr, fs, hold, tr, rev, dly, gp, tv = f
     rv = " ".join("%s=%s" % (k, "-" if regs.get(k) is None else "0x%08x" % regs[k]) for k in SHOT_REGS)
-    print("SHOT n=%d step=%d v=%d td=%d np=%d pw=%d vr=%d fast=%d delay=%d gap=%d s1=%d first=%d after_park=%d stall=%d kind=%s %s | %s"
-          % (n, i, v, td, np_, max(pw, 36), vr, fs, dly, max(gp, 36), td - dly, int(n == 0), int(after_park), int(stall), kind, rv, out), flush=True)
+    print("SHOT n=%d step=%d v=%d td=%d np=%d pw=%d vr=%d fast=%d delay=%d gap=%d s1=%d first=%d after_park=%d stall=%d tv=%d kind=%s %s | %s"
+          % (n, i, v, td, np_, max(pw, 36), vr, fs, dly, max(gp, 36), td - dly, int(n == 0), int(after_park), int(stall), tv, kind, rv, out), flush=True)
 def fmt_obs(o):
     return " ".join("%s=%s" % (k, "-" if x is None else "0x%08x" % x) for k, x in o["registers"].items()) + " state=%s reason=%s" % (o["state"], o["reason"])
 def park(c):
@@ -237,7 +245,7 @@ def release_check(raw):
 def step_fields(s_):
     return (s_[0], s_[1], s_[2] if len(s_) > 2 else 3, s_[3] if len(s_) > 3 else 198, s_[4] if len(s_) > 4 else 750,
             s_[5] if len(s_) > 5 else 1, s_[7] if len(s_) > 7 else 0, s_[8] if len(s_) > 8 else -20, s_[9] if len(s_) > 9 else 0,
-            s_[10] if len(s_) > 10 else 117, s_[11] if len(s_) > 11 else 150)
+            s_[10] if len(s_) > 10 else 117, s_[11] if len(s_) > 11 else 150, s_[12] if len(s_) > 12 else 0)
 PARK_EACH = os.environ.get("PARK_EACH") == "1"
 RESTORE_WAIT = float(os.environ.get("RESTORE_WAIT", "8.0"))
 GFW_WAIT = float(os.environ.get("GFW_WAIT", "5"))
@@ -247,13 +255,15 @@ SEQX = [(i, s_) for i, s_ in enumerate(SEQ) for _ in range(s_[6] if len(s_) > 6 
 SENT = int(os.environ.get("SENTINEL", "0x820410"), 16); CELLLOST = int(os.environ.get("CELLLOST", "0")); skip = [-1]; clost = [0]
 LOST_NOPARK = os.environ.get("LOST_NOPARK") == "1"
 PARTIAL_CONTINUE = os.environ.get("PARTIAL_CONTINUE") == "1"
+SENT0_CONTINUE = os.environ.get("SENT0_CONTINUE") == "1"
 STALL_THROUGH = os.environ.get("SHOOT_THROUGH_STALLS") == "1"
 STALLRUN = int(os.environ.get("STALLRUN", "8")); stallrun = [0]
 fired = [0]; parked_before = [False]; last_stall = [False]
 if os.environ.get("RETRAIN", "0") != "0" or os.environ.get("SBR", "0") != "0":
     print("STOP: RETRAIN and SBR are not allowed during a campaign (no setpci retrain, no secondary bus reset)"); sys.exit(2)
 for s_ in SEQ:   # every step checked before the first shot, not when it comes up
-    v, td, np_, pw, vr, fs, hold, tr, rev, dly, gp = step_fields(s_)
+    v, td, np_, pw, vr, fs, hold, tr, rev, dly, gp, tv = step_fields(s_)
+    assert 0 <= tv <= 20000, s_
     assert 0 <= dly <= 900 and 36 <= gp <= 2000, s_
     assert 575 <= vr <= 825 and v >= FLOOR, s_
     # revert 1 (hand-back) would leave E1 = 0xC2EA, which the NO DIP check below reads as a shot that did not run
@@ -265,8 +275,8 @@ if STALL_THROUGH:
           "host power cycle recovered it on the lab's bench. STALLRUN=%d stalls in a row end the boot." % STALLRUN, flush=True)
 card = Card(PORT)
 pico = card.status(); print("pico: %s" % " | ".join(pico.splitlines()), flush=True)
-if not re.search(r"fw=lab-psr1-push[12]\b", pico):
-    print("STOP: this runner requires lab-psr1-push1 or -push2 firmware"); sys.exit(2)
+if not re.search(r"fw=lab-psr1-push[123]\b", pico):
+    print("STOP: this runner requires lab-psr1-push1, -push2 or -push3 firmware"); sys.exit(2)
 # `u` every boot, not only when locked: push firmware rewrites reg 0x13 = 0x00 and config ID 0x46 = 0x1229 on every call
 # and prints the readback (older firmware skipped both when CML already showed MATCH).
 def unlock_checked(c):
@@ -308,10 +318,10 @@ if True:
             unlock_checked(card)
             parked_before[0] = True
         f = step_fields(step)
-        v, td, np_, pw, vr, fs, hold, tr, rev, dly, gp = f
+        v, td, np_, pw, vr, fs, hold, tr, rev, dly, gp, tv = f
         assert 575 <= vr <= 825
         assert v >= FLOOR
-        a = Attempt(v_dip_mv=v, t_dip_us=td, v_restore_mv=vr, t_restore_us=tr, t_revert_us=0, fast=fs, hold_ms=hold,
+        a = Attempt(v_dip_mv=v, t_dip_us=td, v_restore_mv=vr, t_restore_us=tr, t_revert_us=tv, fast=fs, hold_ms=hold,
                     pulses=np_, pw=pw, gap=gp, delay=dly, revert=rev)
         n_this = fired[0]; ap = parked_before[0]; parked_before[0] = False
         def shot(kind, regs, out, stall=False):

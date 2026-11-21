@@ -3,6 +3,8 @@
 # POWER=wol : OS poweroff over ssh, wait until the host stops answering ping, wait, Wake-on-LAN.
 # POWER=ipmi: OS poweroff over ssh, the BMC confirms the host is off (hard power-off if a clean shutdown stalls),
 #             wait, power on through the BMC.
+# POWER=manual: OS poweroff over ssh, wait until the host stops answering ping, then wait up to MANUAL_WAIT seconds
+#             (default 600) for someone to press the bench's power button.
 
 bench_addr() { echo "${BENCH_ADDR:-${BENCH_SSH#*@}}"; }
 
@@ -41,6 +43,12 @@ power_cycle() {
     off=0; for i in $(seq 1 40); do ping -c1 -W1 "$(bench_addr)" >/dev/null 2>&1 || { off=1; break; }; sleep 3; done
     [ $off = 1 ] || { echo "bench did not go down after a clean shutdown (no BMC here, needs a hand on the power button): stop"; return 7; }
     echo "bench off the network; waiting $((offwait + 15))s for soft-off"; sleep $((offwait + 15))
+    if [ "$power" = manual ]; then
+      echo "MANUAL POWER: press the bench power button now (waiting up to ${MANUAL_WAIT:-600}s) $(date +%H:%M:%S)"
+      for i in $(seq 1 $(( ${MANUAL_WAIT:-600} / 5 ))); do u=$(bench_uptime); [ -n "$u" ] && break; sleep 5; done
+      [ -n "$u" ] || { echo "bench never came up: stop"; return 1; }
+      echo "bench up ${u}s"; return 0
+    fi
     wol; echo "power on (Wake-on-LAN) $(date +%H:%M:%S)"
   fi
   u=""; for i in $(seq 1 60); do u=$(bench_uptime); [ -n "$u" ] && break

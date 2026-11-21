@@ -5,17 +5,20 @@
 #
 # power cycle (Wake-on-LAN or IPMI) -> fresh-boot guard -> plan checksum (when the card names plan files) -> copy the
 # runner to the bench -> host guard -> I2C preflight -> card identity -> temperature gate -> bisect_shots.py (stops at
-# the first shot that is not "under") -> on a ">>> GOLDILOCKS HELD" line with runner status 0: run ON_HOLD if set,
-# else stop and report the held state. Nothing here burns fuses.
+# the first shot that is not "under") -> on a ">>> GOLDILOCKS HELD" line with runner status 0: run ON_HOLD if set
+# (and NO_ON_HOLD is not 1), else stop and report the held state. Nothing here burns fuses.
 #
 # env: NOCYCLE=1 (use the current boot), FLOOR (mV), TMIN (raw READ_TEMP1), TCAP (s), OFFWAIT (s), POWER (wol|ipmi),
 #      RUNTO (s, run time limit), RUNNER (runner file to copy; default bisect_shots.py here), BOOTRUN_LOG (the run
-#      log; default $LOG_DIR/bootrun-<card>.last), and for the runner: TRACE, PARK_EACH, REPEAT, SHOTCAP, LOSTRUN,
-#      RESTORE_WAIT, CELLLOST, CLASSIFY_WRITE, SENTINEL, BAD0_FOLLOWUP (SENTINEL_EXPECT comes from the card function)
+#      log; default $LOG_DIR/bootrun-<card>.last), NO_ON_HOLD=1 (never run ON_HOLD, whatever bench.conf says; the
+#      hunter sets it), and for the runner: TRACE, PARK_EACH, REPEAT, SHOTCAP, LOSTRUN, RESTORE_WAIT, CELLLOST,
+#      CLASSIFY_WRITE, SENTINEL, BAD0_FOLLOWUP, GFW_WAIT, LOST_NOPARK, PARTIAL_CONTINUE, SHOOT_THROUGH_STALLS, STALLRUN
+#      (SENTINEL_EXPECT comes from the card function)
 # Exit codes: 1 bench never came up, 2 usage or config, 3 host guard or preflight failed, 4 plan checksum failed or
 # mismatched, 5 identity mismatch, 6 not a fresh boot, 7 bench did not power off, 8 runner transfer failed,
 # 16 temperature gate (TMIN not reached within TCAP: no shot); otherwise the runner's own exit code (0 sequence done
-# or goldilocks held, 9 controller off, 10 tipped, 13 partial held, 14 mistimed, ...; see bisect_shots.py), 124 when
+# or goldilocks held, 9 controller off, 10 tipped, 13 partial held, 14 mistimed, 15 DSOV 0 held during a GFW stall,
+# ...; see bisect_shots.py), 124 when
 # RUNTO cut the run, or ON_HOLD's exit code after a hold. The last line is "RESULT: ..." or the hold report.
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd); TOOLS=$(dirname "$HERE")
@@ -55,7 +58,7 @@ ssh "$H" "mkdir -p $(printf %q "$BENCH_DIR")" && scp -q "$RUNNER" "$H:$BENCH_DIR
   && scp -q "$HERE/park.py" "$HERE/preflight.py" "$TOOLS/vfi_snap.py" "$TOOLS/vfi_common.py" "$H:$BENCH_DIR/" \
   || { echo "RUNNER TRANSFER FAILED: stop"; exit 8; }
 L=${BOOTRUN_LOG:-${LOG_DIR:-.}/bootrun-$CARD.last}; mkdir -p "$(dirname "$L")"
-XENV="REPEAT=${REPEAT:-1} SHOTCAP=${SHOTCAP:-450} LOSTRUN=${LOSTRUN:-8} RESTORE_WAIT=${RESTORE_WAIT:-8.0} CELLLOST=${CELLLOST:-0} CLASSIFY_WRITE=${CLASSIFY_WRITE:-0} SENTINEL=${SENTINEL:-0x820410} BAD0_FOLLOWUP=${BAD0_FOLLOWUP:-0} SENTINEL_EXPECT=$SENTINEL_EXPECT"
+XENV="REPEAT=${REPEAT:-1} SHOTCAP=${SHOTCAP:-450} LOSTRUN=${LOSTRUN:-8} RESTORE_WAIT=${RESTORE_WAIT:-8.0} CELLLOST=${CELLLOST:-0} CLASSIFY_WRITE=${CLASSIFY_WRITE:-0} SENTINEL=${SENTINEL:-0x820410} BAD0_FOLLOWUP=${BAD0_FOLLOWUP:-0} GFW_WAIT=${GFW_WAIT:-5} LOST_NOPARK=${LOST_NOPARK:-0} PARTIAL_CONTINUE=${PARTIAL_CONTINUE:-0} SHOOT_THROUGH_STALLS=${SHOOT_THROUGH_STALLS:-0} STALLRUN=${STALLRUN:-8} SENTINEL_EXPECT=$SENTINEL_EXPECT"
 ssh "$H" "bash -s -- $(printf '%q ' "$TAG" "$SEQ" "$GPC" "$SMC" "$FLOOR" "$TMIN" "$TCAP" "$TRACE" "$PARK_EACH" "$XENV" "${RUNTO:-900}" "$BENCH_DIR" "$BENCH_PY" "${BENCH_TASKSET:-}" "$PORT" "$CARD_BDF" "${GLITCH_CMDLINE:-}" "${MASK_PCIEHP:-0}")" <<'R' | tee "$L"
 TAG=$1; SEQ=$2; GPC=$3; SMC=$4; FLOOR=$5; TMIN=$6; TCAP=$7; TRACE=$8; PARK_EACH=$9; XENV=${10}; RUNTO=${11}
 D=${12}; PY=${13}; TS=${14}; PORT=${15}; BDF=${16}; CMDW=${17}; MASK=${18}
@@ -113,13 +116,15 @@ rc=${PIPESTATUS[0]}
 if grep -q "^>>> GOLDILOCKS HELD" "$L"; then
   [ "$rc" = 0 ] || { echo "HOLD LINE BUT RUNNER RC $rc: no ON_HOLD, stop for review"; exit "$rc"; }
   echo "HOLD SEEN $(date +%H:%M:%S): $TAG is held in the goldilocks state (rail under PMBus control, not parked)"
-  if [ -n "${ON_HOLD:-}" ]; then
+  if [ -n "${ON_HOLD:-}" ] && [ "${NO_ON_HOLD:-0}" != 1 ]; then
     CARD=$CARD TAG=$TAG BENCH_SSH=$BENCH_SSH BENCH_DIR=$BENCH_DIR RUN_LOG=$L bash -c "$ON_HOLD"; hrc=$?
     echo "ON_HOLD rc=$hrc"; exit "$hrc"
   fi
-  echo "No ON_HOLD hook set: stopping here. Read the held state on the bench (vfi_snap.py in $BENCH_DIR), then park (park.py) or power-cycle."
+  if [ -n "${ON_HOLD:-}" ]; then echo -n "NO_ON_HOLD=1, the ON_HOLD hook was not run: stopping here."
+  else echo -n "No ON_HOLD hook set: stopping here."; fi
+  echo " Read the held state on the bench (vfi_snap.py in $BENCH_DIR), then park (park.py) or power-cycle."
   exit 0
 fi
-r=$(grep -E "TIPPED|MISTIMED at|PARTIAL HELD|sequence exhausted|CONTROLLER OFF|NO DIP|STOP|FAILED|MISMATCH|HOST GUARD" "$L" | head -1)
+r=$(grep -E "TIPPED|MISTIMED at|PARTIAL HELD|STALL DSOV0 HELD|sequence exhausted|CONTROLLER OFF|NO DIP|STOP|FAILED|MISMATCH|HOST GUARD" "$L" | head -1)
 echo "RESULT: ${r:-see log} (runner rc $rc)"
 exit "$rc"

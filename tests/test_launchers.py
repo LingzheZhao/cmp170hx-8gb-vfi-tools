@@ -166,6 +166,10 @@ class CampaignTest(unittest.TestCase):
         fx, seq = self.fixture([(">>> PARTIAL HELD (card e)", 13)])
         rc, out, calls = fx.run("campaign.sh", "e", seq)
         self.assertEqual(rc, 13, out)
+        fx, seq = self.fixture([(">>> STALL DSOV0 HELD (card e): DSOV 0 while GFW is stalled", 15)])
+        rc, out, calls = fx.run("campaign.sh", "e", seq)
+        self.assertEqual(rc, 13, out)
+        self.assertIn("CAMPAIGN: partial held", out)
         fx, seq = self.fixture([HELD])
         rc, out, calls = fx.run("campaign.sh", "e", seq)
         self.assertEqual(rc, 0, out)
@@ -332,6 +336,30 @@ class BootrunTest(unittest.TestCase):
                                          ON_HOLD='echo HOOK-RAN')
         self.assertEqual(rc, 11, out)
         self.assertIn("HOLD LINE BUT RUNNER RC 11", out)
+        self.assertNotIn("HOOK-RAN", out)
+
+    def test_new_runner_settings_reach_the_remote_half(self):
+        rc, out, logs = self.run_bootrun(LOST_NOPARK=1, SHOOT_THROUGH_STALLS=1, STALLRUN=20, GFW_WAIT=1, PARTIAL_CONTINUE=1)
+        self.assertEqual(rc, 0, out)
+        for frag in ("LOST_NOPARK=1", "SHOOT_THROUGH_STALLS=1", "STALLRUN=20", "GFW_WAIT=1", "PARTIAL_CONTINUE=1"):
+            self.assertIn(frag, logs["remote.args"])
+        rc, out, logs = self.run_bootrun()
+        for frag in ("LOST_NOPARK=0", "SHOOT_THROUGH_STALLS=0", "STALLRUN=8", "GFW_WAIT=5", "PARTIAL_CONTINUE=0"):
+            self.assertIn(frag, logs["remote.args"])
+
+    def test_no_on_hold_never_runs_the_hook(self):
+        rc, out, logs = self.run_bootrun(FAKE_REMOTE_OUT=">>> GOLDILOCKS HELD (card e) v=350 td=-60",
+                                         ON_HOLD='echo HOOK-RAN; exit 3', NO_ON_HOLD=1)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("HOLD SEEN", out)
+        self.assertIn("NO_ON_HOLD=1, the ON_HOLD hook was not run: stopping here.", out)
+        self.assertNotIn("HOOK-RAN", out)
+
+    def test_stall_hold_is_reported_and_runs_no_hook(self):
+        rc, out, logs = self.run_bootrun(FAKE_REMOTE_OUT=">>> STALL DSOV0 HELD (card e): a goldilocks signature",
+                                         FAKE_REMOTE_RC=15, ON_HOLD='echo HOOK-RAN')
+        self.assertEqual(rc, 15, out)
+        self.assertIn("RESULT: >>> STALL DSOV0 HELD (card e)", out)
         self.assertNotIn("HOOK-RAN", out)
 
     def test_power_cycle_path(self):

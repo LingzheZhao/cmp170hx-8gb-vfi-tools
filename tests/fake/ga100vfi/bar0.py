@@ -4,7 +4,7 @@ from . import _bench as b
 
 def restore(bdf="0000:05:00.0", wait_s=0.25, settle_s=0.15):
     b.log("RESTORE")
-    return b.OUTCOMES[b.cur[0]] is not None
+    return b.link_up()
 
 
 class Bar0:

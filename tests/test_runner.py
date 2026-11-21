@@ -33,7 +33,8 @@ CELL3 = STD + [3]
 def run(seq, shots, **env):
     with tempfile.TemporaryDirectory() as tmp:
         log = os.path.join(tmp, "events")
-        e = {k: v for k, v in os.environ.items() if not k.startswith(("FAKE_", "REPEAT", "SENTINEL", "FLOOR", "RETRAIN", "SBR", "PARK_EACH", "LOSTRUN", "VFI_", "BAD0_", "TRACE"))}
+        e = {k: v for k, v in os.environ.items() if not k.startswith(("FAKE_", "REPEAT", "SENTINEL", "FLOOR", "RETRAIN", "SBR", "PARK_EACH", "LOSTRUN", "VFI_", "BAD0_", "TRACE",
+                                                                     "LOST_NOPARK", "PARTIAL_CONTINUE", "SHOOT_THROUGH", "STALLRUN", "GFW_WAIT", "CELLLOST", "SHOTCAP"))}
         e.update(FAKE_LOG=log, FAKE_SHOTS=",".join(shots), FLOOR="381", VFI_BDF="0000:05:00.0", VFI_TRACE_DIR=tmp)
         e.update({k: str(v) for k, v in env.items()})
         p = subprocess.run([sys.executable, "-I", DRIVE, RUNNER, "card T", json.dumps(seq)], env=e, cwd=tmp,
@@ -56,6 +57,18 @@ def bar0_reads(events):
 
 def shots(events):
     return [x for x in events if x.startswith("SHOT")]
+
+
+def shot_lines(out):
+    """The runner's SHOT lines as dicts (fields before ' | ') plus the outcome text."""
+    res = []
+    for line in out.splitlines():
+        if line.startswith("SHOT "):
+            head, _, text = line[5:].partition(" | ")
+            d = dict(x.split("=", 1) for x in head.split())
+            d["out"] = text
+            res.append(d)
+    return res
 
 
 class RunnerTest(unittest.TestCase):
@@ -361,6 +374,168 @@ class RunnerTest(unittest.TestCase):
             self.assertNotEqual(p.returncode, 0)
             self.assertIn("set VFI_BDF", p.stdout + p.stderr)
             self.assertFalse(os.path.exists(env["FAKE_LOG"]))            # nothing was opened
+
+
+STALL_READ = [FUSECTRL, GFW, DSOV, CRC, PLM, SENT]
+
+
+class RunnerStallAndRecoveryTest(unittest.TestCase):
+    """The paths ported from the lab's runner of 2026-11-20: stall reads, compass frames, shoot-through stalls,
+    the sentinel rule for DSOV 0, LOST_NOPARK recovery and the per-shot SHOT lines."""
+
+    def test_sentinel_zero_with_dsov0_is_a_goldilocks(self):
+        rc, out, ev = run([STD], "e")
+        self.assertEqual(rc, 0, out)
+        self.assertIn(">>> GOLDILOCKS HELD (card T) v=450 td=-60", out)
+        self.assertNotIn("hidden-poison", out)
+        self.assertNotIn("PARK", ev)
+        rc, out, ev = run([STD], "z")                                     # DSOV 1 with sentinel 0 stays poison
+        self.assertEqual(rc, 10, out)
+        self.assertIn("hidden-poison alias 0x820410=0x00000000", out)
+
+    def test_stall_read_is_read_only_and_ends_the_boot_by_default(self):
+        rc, out, ev = run([CELL3], "s")
+        self.assertEqual(rc, 10, out)
+        self.assertIn("stall read (GFW still booting after 5 s; reads only, no g/r/j): FUSECTRL=0xe0040000 "
+                      "GFW=0x00000000 DSOV=0x00000001 CRC=0x00000075 PLM=0xffffffff SENTINEL=0x00000000", out)
+        self.assertIn("no park: GFW is still booting", out)
+        self.assertNotIn("PARK", ev)
+        self.assertEqual(len(shots(ev)), 1)
+        reads = bar0_reads(after_last_shot(ev))
+        self.assertEqual(reads[-6:], STALL_READ)
+        self.assertEqual(reads[:-6], [FUSECTRL, GFW] * 21)
+        self.assertFalse([x for x in ev if x.startswith("WR")])
+        sl = shot_lines(out)
+        self.assertEqual((sl[0]["kind"], sl[0]["stall"], sl[0]["CRC"], sl[0]["SENTINEL"]),
+                         ("stall", "1", "0x00000075", "0x00000000"))
+        self.assertNotIn("hidden-poison", out)                            # sentinel 0 in a stall is logged, not scored
+
+    def test_gfw_wait_sets_the_poll(self):
+        rc, out, ev = run([STD], "s", GFW_WAIT=1)
+        self.assertEqual(rc, 10, out)
+        self.assertIn("GFW still booting after 1 s", out)
+        self.assertEqual(bar0_reads(after_last_shot(ev))[:-6], [FUSECTRL, GFW] * 5)
+
+    def test_shoot_through_stalls_is_opt_in_with_a_warning_and_a_cap(self):
+        seq = [STD + [3]]
+        rc, out, ev = run(seq, "ssu", SHOOT_THROUGH_STALLS=1)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("WARNING: SHOOT_THROUGH_STALLS=1", out)
+        self.assertIn("rule 2 of upstream pico-ga100vfi", out)
+        self.assertIn("{'under': 1, 'lost': 0, 'partial': 0, 'other': 0, 'stall': 2}", out)
+        self.assertEqual(len(shots(ev)), 3)
+        rc, out, ev = run(seq, "sss", SHOOT_THROUGH_STALLS=1, STALLRUN=1)
+        self.assertEqual(rc, 10, out)
+        self.assertIn("2 GFW stalls in a row", out)
+        self.assertEqual(len(shots(ev)), 2)
+        self.assertNotIn("PARK", ev)
+        rc, out, ev = run([STD + [2]], "us", SHOOT_THROUGH_STALLS=1)       # a stall as the last shot: no final park
+        self.assertEqual(rc, 0, out)
+        self.assertIn("no park: GFW is still booting after the last shot", out)
+        self.assertNotIn("PARK", ev)
+        rc, out, ev = run([STD], "s", SHOOT_THROUGH_STALLS=1)              # single mode still stops at a stall
+        self.assertEqual(rc, 10, out)
+
+    def test_dsov0_in_a_stall_is_held_unless_continuing_is_asked_for(self):
+        rc, out, ev = run([CELL3], "S")
+        self.assertEqual(rc, 15, out)
+        self.assertIn(">>> STALL DSOV0 HELD (card T): DSOV 0 while GFW is stalled", out)
+        self.assertNotIn("PARK", ev)
+        self.assertEqual(shot_lines(out)[0]["kind"], "partial")
+        rc, out, ev = run([CELL3], "Suu", SHOOT_THROUGH_STALLS=1)          # shoot-through alone does not continue
+        self.assertEqual(rc, 15, out)
+        rc, out, ev = run([CELL3], "Suu", SHOOT_THROUGH_STALLS=1, PARTIAL_CONTINUE=1)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("STALL PARTIAL FUSECTRL=0xe0040000 GFW=0x00000000 DSOV=0x00000000 CRC=0x00000077", out)
+        self.assertIn("'partial': 1", out)
+        self.assertEqual(len(shots(ev)), 3)
+
+    def test_goldilocks_signature_in_a_stall_is_always_held_without_the_hold_hook_line(self):
+        rc, out, ev = run([CELL3], "Hu", SHOOT_THROUGH_STALLS=1, PARTIAL_CONTINUE=1)
+        self.assertEqual(rc, 15, out)
+        self.assertIn("a goldilocks signature (DSOV 0, CRC 0x55, full mask) while GFW is stalled", out)
+        self.assertNotIn(">>> GOLDILOCKS HELD", out)                      # bootrun's ON_HOLD hook must not fire
+        self.assertEqual((shot_lines(out)[0]["kind"], shot_lines(out)[0]["stall"]), ("goldilocks", "1"))
+        self.assertEqual(len(shots(ev)), 1)
+
+    def test_poison_in_a_stall_read_ends_the_boot(self):
+        rc, out, ev = run([CELL3], "ju", GFW_WAIT=0.5, SHOOT_THROUGH_STALLS=1)
+        self.assertEqual(rc, 10, out)
+        self.assertIn("poisoned FUSECTRL=0xbadf510e (stall read)", out)
+        self.assertEqual(bar0_reads(after_last_shot(ev)), [FUSECTRL, GFW] * 3 + [FUSECTRL])
+        self.assertEqual(len(shots(ev)), 1)
+        self.assertNotIn("PARK", ev)
+        self.assertEqual(shot_lines(out)[0]["kind"], "poison")
+
+    def test_compass_frames_are_logged_and_the_cell_goes_on(self):
+        rc, out, ev = run([CELL3], "kuu")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("step 0 shot 0 v=450 td=-60 pw=198 vr=750 f=1: dsov1 crc=0x57 priv=0xffffffff", out)
+        self.assertIn("{'under': 2, 'lost': 0, 'partial': 0, 'other': 0, 'compass': 1}", out)
+        self.assertEqual(shot_lines(out)[0]["kind"], "compass")
+        rc, out, ev = run([STD], "k")                                     # single mode stops at it
+        self.assertEqual(rc, 10, out)
+
+    def test_lost_nopark_sends_one_reset_pulse_and_needs_a_healthy_read(self):
+        rc, out, ev = run([CELL3], "vuu", LOST_NOPARK=1)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("recovery reset after lost shot: healthy_locked", out)
+        self.assertIn("{'under': 2, 'lost': 1, 'partial': 0, 'other': 0}", out)
+        self.assertEqual(ev.count("SER r"), 1)
+        self.assertEqual(ev.count("PARK"), 1)                              # only the end-of-run park
+        r = ev.index("SER r")
+        self.assertEqual(bar0_reads(ev[r:ev.index([x for x in ev if x.startswith("SHOT")][1])]), FULL)
+        for code, why in (("l", "link down"), ("V", "poisoned")):
+            with self.subTest(code=code):
+                rc, out, ev = run([CELL3], code + "uu", LOST_NOPARK=1)
+                self.assertEqual(rc, 10, out)
+                self.assertIn("lost and not recovered by a plain reset (%s)" % why, out)
+                self.assertNotIn("PARK", ev)
+                self.assertEqual(len(shots(ev)), 1)
+        rc, out, ev = run([CELL3], "vuu", LOST_NOPARK=1, FAKE_R_REPLY="PEX_RST_BUF* low 100 ms (PCIe reset)")
+        self.assertEqual(rc, 10, out)
+        self.assertIn("no 'released' reply to r", out)
+        rc, out, ev = run([CELL3], "vvv", LOST_NOPARK=1, LOSTRUN=2)        # LOSTRUN still ends the run
+        self.assertEqual(rc, 10, out)
+        self.assertIn("2 lost in a row", out)
+
+    def test_shot_lines_carry_the_geometry_and_mark_the_first_shot(self):
+        seq = [[381, 62, 1, 198, 750, 0, 2, 0, -20, 0, 117, 150], [375, 60, 3, 120, 700, 1, 1, 0, -20, 0, 300, 100]]
+        rc, out, ev = run(seq, "uku", FLOOR=375)
+        self.assertEqual(rc, 0, out)
+        sl = shot_lines(out)
+        self.assertEqual(len(sl), 3)
+        self.assertEqual([(d["n"], d["step"], d["first"], d["kind"]) for d in sl],
+                         [("0", "0", "1", "under"), ("1", "0", "0", "compass"), ("2", "1", "0", "under")])
+        self.assertEqual((sl[0]["v"], sl[0]["td"], sl[0]["np"], sl[0]["pw"], sl[0]["fast"], sl[0]["delay"], sl[0]["s1"]),
+                         ("381", "62", "1", "198", "0", "117", "-55"))
+        self.assertEqual((sl[2]["np"], sl[2]["pw"], sl[2]["vr"], sl[2]["gap"], sl[2]["s1"]), ("3", "120", "700", "100", "-240"))
+        self.assertEqual(sl[0]["DSOV"], "0x00000001")
+        self.assertEqual(sl[1]["out"], "dsov1 crc=0x57 priv=0xffffffff")
+        self.assertIn("note: shot 0 of this run starts from the GPU's own rail control", out)
+        rc, out, ev = run([CELL3], "lu")                                   # a parked lost shot marks the next one
+        self.assertEqual([d["after_park"] for d in shot_lines(out)], ["0", "1", "0"])
+
+    def test_shot_lines_for_shots_that_end_the_boot(self):
+        for codes, env, kind in (("c", {}, "latch"), ("u", {"FAKE_E1": "0xc2ea"}, "nodip"), ("n", {}, "unknown"),
+                                 ("x", {}, "poison"), ("h", {}, "poison"), ("l", {}, "lost"), ("p", {}, "partial"),
+                                 ("L", {}, "mistimed"), ("g", {}, "goldilocks")):
+            with self.subTest(codes=codes):
+                rc, out, ev = run([STD], codes, **env)
+                sl = shot_lines(out)
+                self.assertEqual(len(sl), 1, out)
+                self.assertEqual(sl[0]["kind"], kind)
+        rc, out, ev = run([STD], "A")                                      # refused: nothing fired, no SHOT line
+        self.assertEqual(shot_lines(out), [])
+
+    def test_planner_parser_reads_the_new_output(self):
+        sys.path.insert(0, os.path.join(ROOT, "tools", "planner"))
+        from planner_auto import parse as P
+        seq = [STD + [3], [444] + STD[1:] + [2]]
+        rc, out, ev = run(seq, "ukuuu", REPEAT=2)
+        self.assertEqual(rc, 0, out)
+        recs, rep = P.parse_text(out, card="t", seq=seq)
+        self.assertEqual(len(recs), len(shot_lines(out)))
 
 
 @unittest.skipUnless(passive_observe, "set GA100VFI_HOST to the patched pico-ga100vfi host directory")

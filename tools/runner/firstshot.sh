@@ -23,7 +23,7 @@ print(json.dumps([s]))" "$STEPS" "$i") || { echo "FIRSTSHOT: bad step $i: stop";
   echo "$out" > "$LOGDIR/boot-$((i+1)).log"
   echo "$out" | grep -E "$SHOW" | grep -v "^   timing"
   echo "$out" | grep -qE "HOLD SEEN|GOLDILOCKS HELD" && { echo "FIRSTSHOT: goldilocks held, see the hold report (bootrun rc $rc)"; exit "$rc"; }
-  echo "$out" | grep -q "PARTIAL HELD" && { echo "FIRSTSHOT: partial held for read-only inspection"; exit 13; }
+  echo "$out" | grep -qE "PARTIAL HELD|STALL DSOV0 HELD" && { echo "FIRSTSHOT: partial held for read-only inspection"; exit 13; }
   echo "$out" | grep -qE "$STOPRE" && { echo "FIRSTSHOT: stop for review (bootrun rc $rc)"; exit 2; }
   [ "$rc" = 0 ] || [ "$rc" = 10 ] || { echo "FIRSTSHOT: bootrun exit $rc: stop for review"; exit 2; }
 done

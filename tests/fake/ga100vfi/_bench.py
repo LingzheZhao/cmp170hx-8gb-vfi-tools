@@ -28,18 +28,32 @@ OUTCOMES = {
     "c": [{}],                                                   # controller latched off (STATUS_WORD / READ_VOUT)
     "y": [{0x820000: 0xBAD00100}, {}],                           # 0xBAD0 at FUSECTRL, idle again on the next read
     "Y": [{0x820000: 0xBAD00100}],                               # 0xBAD0 at FUSECTRL that stays
+    # GFW stalls (GFW never finishes; the runner polls GFW_WAIT, then does one read-only stall read)
+    "s": [{0x118234: 0x0, 0x820070: 0x75, 0x820410: 0}],             # stall: DSOV 1, CRC 0x75, sentinel 0
+    "S": [{0x118234: 0x0, 0x820084: 0, 0x820070: 0x77, 0x820410: 0}],  # stall with DSOV 0, CRC 0x77 (a partial)
+    "H": [{0x118234: 0x0, 0x820084: 0, 0x820410: 0}],                # stall with a goldilocks signature
+    "j": [{0x118234: 0x0}, {0x118234: 0x0}, {0x118234: 0x0}, {0x820000: 0xBADF510E}],   # stall, then FUSECTRL
+                                                                     # poisoned at the stall read (GFW_WAIT=0.5)
+    "I": [{0x118234: 0x0, 0x820410: 0}],                             # stall: DSOV 1, CRC 0x55, sentinel 0 (init disturbed)
+    "e": [{0x820084: 0, 0x820410: 0}],                               # goldilocks whose alias sentinel reads 0
+    "k": [{0x820070: 0x57}],                                         # compass: DSOV 1, CRC 0x57, full mask
+    "v": None,                                                       # lost; healthy after one 'r' pulse
+    "V": None,                                                       # lost; DSOV poisoned after the 'r' pulse
     # release-timing codes (MISTIMED): registers as under unless noted
     "L": [{}], "F": [{}], "N": [{}], "W": [{}],
     "G": [{0x820084: 0}], "K": None, "X": [{0x820084: 0xBADF1701}], "P": [{0x820084: 0, 0x8200FC: 0xFFFFFEFE}],
     # serial-level codes: the shot reply itself
     "n": [{}], "A": [{}], "E": [{}], "D": [{}],
 }
+# Lost codes whose link comes back after an 'r' (100 ms PEX_RST) pulse, with these reads.
+RECOVER = {"v": [{}], "V": [{0x820084: 0xBADF1701}]}
 RELEASE = {"L": "release_at=9 scheduled=0 via=alarm", "F": "release_at=0 scheduled=0 via=fallback", "N": None,
            "K": "release_at=10 scheduled=0 via=alarm", "G": "release_at=9 scheduled=0 via=alarm",
            "X": "release_at=10 scheduled=0 via=alarm", "P": "release_at=9 scheduled=0 via=alarm"}
 cur = [os.environ.get("FAKE_BASE", "u")]   # the pre-shot baseline look sees this code
 shot = [0]
 look = [0]
+reset_seen = [False]   # an 'r' pulse since the last shot
 open_cards = [0]
 
 
@@ -52,11 +66,18 @@ def next_shot():
     cur[0] = SHOTS[shot[0]] if shot[0] < len(SHOTS) else "u"
     shot[0] += 1
     look[0] = 0
+    reset_seen[0] = False
     return cur[0]
+
+
+def link_up():
+    return OUTCOMES[cur[0]] is not None or (reset_seen[0] and cur[0] in RECOVER)
 
 
 def bar0_value(offset):
     looks = OUTCOMES[cur[0]]
+    if looks is None:
+        looks = RECOVER[cur[0]]
     regs = dict(HEALTHY)
     regs.update(looks[min(look[0] - 1, len(looks) - 1)])
     return regs[offset]

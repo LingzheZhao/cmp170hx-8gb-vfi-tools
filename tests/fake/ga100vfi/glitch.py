@@ -57,6 +57,9 @@ class Card:
         b.log("SER " + line)
         if line == "u":
             return os.environ.get("FAKE_UNLOCK", "unlock already MATCH (CML 0x08)\r\nunlock MATCH wp=00 cfg=1229")
+        if line == "r":
+            b.reset_seen[0] = True
+            return os.environ.get("FAKE_R_REPLY", "PEX_RST_BUF* low 100 ms (PCIe reset)\r\nreleased")
         if line == "v":
             return os.environ.get("FAKE_V", "clk=400 MHz  nvvdd=0.0000 V  sample_ns=240.0  "
                                   "last reset: power-on / external reset  fw=lab-psr1-push2-debug")

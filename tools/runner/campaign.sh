@@ -21,7 +21,7 @@ for b in $(seq 1 $MAX); do
   echo "$out" > "$LOGDIR/boot-$b.log"
   echo "$out" | grep -E "$SHOW" | grep -v "^   timing"
   echo "$out" | grep -qE "HOLD SEEN|GOLDILOCKS HELD" && { echo "CAMPAIGN: goldilocks held, see the hold report (bootrun rc $rc)"; exit "$rc"; }
-  echo "$out" | grep -q "PARTIAL HELD" && { echo "CAMPAIGN: partial held for read-only inspection"; exit 13; }
+  echo "$out" | grep -qE "PARTIAL HELD|STALL DSOV0 HELD" && { echo "CAMPAIGN: partial held for read-only inspection"; exit 13; }
   echo "$out" | grep -qE "$STOPRE" && { echo "CAMPAIGN: stop for review (bootrun rc $rc)"; exit 2; }
   [ "$rc" = 0 ] && echo "$out" | grep -q "sequence exhausted" && { echo "CAMPAIGN: sequence done"; exit 0; }
   [ "$rc" = 10 ] || { echo "CAMPAIGN: bootrun exit $rc: stop for review"; exit 2; }

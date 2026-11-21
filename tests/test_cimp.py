@@ -39,6 +39,13 @@ cell 1 v=381 td=-60 np=1 pw=167 vr=625: {'under': 0, 'lost': 0, 'partial': 0, 'o
 step 2 shot 2 v=381 td=-60 pw=177 vr=625 f=1: dsov0 crc=0x00 priv=0xfffffcee
 cell 2 v=381 td=-60 np=1 pw=177 vr=625: {'under': 0, 'lost': 0, 'partial': 1, 'other': 0}
 """
+POIS = """   glitch vd=388 td=-60 vr=625 tr=-20 tv=171 fast=1 hold=0 pw=157 gap=150 delay=117 revert=0 reset_at=-1000 dither=0 hold_at=none
+   release_at=0 scheduled=0 via=alarm
+   temp_raw=398
+step 3 shot 3 v=388 td=-60 pw=157 vr=625 f=1: poisoned FUSECTRL=0xbadf510e (no further BAR0 reads)
+cell 3 v=388 td=-60 np=1 pw=157 vr=625: {'under': 0, 'lost': 0, 'partial': 0, 'other': 1}
+   poison reset (100 ms PEX_RST): healthy_locked
+"""
 HOLD = """   glitch vd=381 td=-60 vr=625 tr=-20 tv=171 fast=1 hold=0 pw=137 gap=150 delay=117 revert=0 reset_at=-1000 dither=0 hold_at=none
    glitch NOTE: push3: PMBus write act=1 scheduled at -40 us ran from -40 us across the PEX_RST release at 0 (allowed in push3; release_at is the check)
    release_at=0 scheduled=0 via=alarm
@@ -163,6 +170,15 @@ class Watch(unittest.TestCase):
         self.assertIn("PHASE  SHOOTING", out)
         self.assertIn("3 shots fired of 20", out)
         self.assertIn("FAN    OK, in band", out)
+
+    def test_poison_reset_is_shown_and_counted(self):
+        d = tempfile.mkdtemp()
+        open(os.path.join(d, "q1.log"), "w").write("######## q1 boot 1 [label x] cont 0 n=20 12:00:00\n")
+        open(os.path.join(d, "q1-b01.raw"), "w").write(BOOT + POIS)
+        rc, out = run(["watch", "--once", "--no-color", "--log-dir", d], self.home)
+        self.assertIn("POISON, cleared by a 100 ms reset", out)
+        self.assertIn("poison resets 1", out)
+        self.assertIn("poison 1", out)
 
     def test_log_mode(self):
         d = tempfile.mkdtemp()

@@ -584,6 +584,7 @@ R_TEMP = re.compile(r"^\s+temp_raw=(\d+)")
 R_GATE = re.compile(r"gate temp_raw=(\d+|unreadable) want \[(\d+), (\d+)\]")
 R_FRAME = re.compile(r"DSOV=(0x[0-9a-f]+|-) CRC=(0x[0-9a-f]+|-) PLM=(0x[0-9a-f]+|-)")
 R_STEP = re.compile(r"^step (\d+)(?: shot \d+)? v=\d+ .*?f=\d+: (.*)$")
+R_PRESET = re.compile(r"^\s+poison reset \(100 ms PEX_RST\): (.*)$")
 R_CELL = re.compile(r"^cell (\d+)(?: \([^)]*\))? v=(\d+) td=-?\d+ np=(\d+) pw=(\d+) vr=(\d+): \{(.*)\}")
 R_SHOT = re.compile(r"^SHOT (.*?) \| (.*)$")
 R_TMAX = re.compile(r"\bTMAX=(\d+)")
@@ -602,7 +603,8 @@ LADDER = [
     ("CRC44", "DSOV 0 but CRC 0x44 (blocks 0 and 2 never checked). Looks close; an active sense keeps CRC at 0x44 and "
               "the write-window check fails. Not burnable."),
     ("over", "DSOV 0, CRC 0x00, PLM 0xfffffcee-like: blocks wiped. Too much."),
-    ("poison", "FUSECTRL 0xBADF/0xBAD0 or the sentinel alias wrong: the fuse controller is wedged; power cycle."),
+    ("poison", "FUSECTRL 0xBADF/0xBAD0 or the sentinel alias wrong: the fuse controller is wedged; power cycle "
+               "(with POISON_RESET=1 the runner clears a FUSECTRL poison with a 100 ms reset once GFW is ready)."),
     ("lost", "the GPU fell off the bus; the runner recovers or the boot ends."),
     ("under", "nothing happened; a clean boot."),
 ]
@@ -615,7 +617,12 @@ def classify(shot):
         return "GOLDILOCKS", "GOLDILOCKS (held for the active sense)"
     if shot.get("hold"):
         return "HOLD", "HOLD: " + shot["hold"]
-    if "hidden-poison" in st or "poisoned" in st or shot.get("poison"):
+    if "hidden-poison" in st or "poisoned" in st or shot.get("poison") or kind == "poison":
+        r_ = shot.get("reset")
+        if r_ == "healthy_locked":
+            return "poison", "POISON, cleared by a 100 ms reset"
+        if r_:
+            return "poison", "POISON, the reset did not clear it (%s)" % r_[:40]
         return "poison", "POISON (controller wedged)"
     d = shot.get("cell", {})
     if d.get("lost") or st.strip().startswith("lost") or kind == "lost":
@@ -738,6 +745,16 @@ def parse_boot(lines):
         m = R_STEP.match(ln)
         if m and cur is not None:
             cur["step"] = m.group(2)
+        m = R_PRESET.match(ln)
+        if m:
+            res = m.group(1).strip()
+            b["resets"] = b.get("resets", 0) + (1 if res == "healthy_locked" else 0)
+            tgt = cur if cur is not None else (b["shots"][-1] if b["shots"] else None)
+            if tgt is not None:
+                tgt["reset"] = res
+                if "key" in tgt:
+                    tgt["key"], tgt["words"] = classify(tgt)
+            continue
         m = R_CELL.match(ln)
         if m:
             d = {k: int(v) for k, v in re.findall(r"'(\w+)': (\d+)", m.group(6))}
@@ -931,6 +948,7 @@ class Watch:
             tally[s["key"]] = tally.get(s["key"], 0) + 1
         S["tally"] = tally
         S["trips"] = [b["trip"] for b in boots if b["trip"]]
+        S["resets"] = sum(b.get("resets", 0) for b in boots)
         hold = next((b["hold"] for b in boots if b["hold"]), None)
         lm = max([mtime(f) or 0 for f in files] or [0])
         S["log_age"] = now - lm if lm else None
@@ -1056,8 +1074,9 @@ def panel(S, tick, color):
     col, cue = fan_cue(S)
     L.append("FAN    " + c(col, cue))
     shots, tot = S.get("shots", []), S.get("total")
-    L.append("RUN    %d shots fired%s   boots %d   trips %d" % (len(shots), (" of %d" % tot) if tot else "",
-                                                               len(S.get("boots", [])), len(S.get("trips", []))))
+    L.append("RUN    %d shots fired%s   boots %d   trips %d%s" % (len(shots), (" of %d" % tot) if tot else "",
+                                                                 len(S.get("boots", [])), len(S.get("trips", [])),
+                                                                 ("   poison resets %d" % S["resets"]) if S.get("resets") else ""))
     L.append(c("2", "-" * min(W, 78)))
     L.append(c("2", "last shots (newest last)            v / restore / delay   temp   outcome"))
     for s in shots[-8:]:

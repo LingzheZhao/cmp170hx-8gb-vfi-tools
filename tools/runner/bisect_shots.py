@@ -145,20 +145,21 @@ def observe(read32):
     return result
 def bad(x): return isinstance(x, int) and (x >> 20) == 0xBAD   # 0xBADF.... poison or 0xBAD0.... error read
 SENT_BASE = [None]   # the alias value of this boot's healthy pre-shot read
-def look(bar):
+def look(bar, sent0=False):
     """observe(), then the SENTINEL alias register once the five read cleanly. After a run scored all "under", a later
     preflight on the same boot once found fuse alias registers (0x820324, 0x820410, per-GPC TPC/PES) reading 0xbadf1020
     / 0xbad00100 while FUSECTRL, DSOV, CRC and PLM were normal (2026-11-20; cause not known). With DSOV 1 the value
     has to match this boot's pre-shot baseline (0x1 on several cards here); 0 and all-ones are failed reads.
     With DSOV 0 the option shadows have not been sensed and the alias reads 0 in a real goldilocks: on one card a
     GFW-ready DSOV 0 / CRC 0x55 / full-mask frame was thrown away as hidden poison for that reason (2026-11-20).
-    So with DSOV 0 only an error value (0xBAD....) or all-ones counts as poison."""
+    So with DSOV 0 only an error value (0xBAD....) or all-ones counts as poison. sent0: SENT0_CONTINUE applies (frames
+    read after a shot only, never the pre-shot baseline or the healthy read a reset pulse must give)."""
     o = observe(bar.rd32); r = o["registers"]
     if SENT and o["state"] in ("healthy_locked", "candidate", "partial_or_corrupt") and not any(bad(x) for x in r.values()):
         try: r["SENTINEL"] = sv = bar.rd32(SENT)
         except OSError as e: o.update(state="unknown", reason="SENTINEL: %s" % e); return o
         dsov0 = r.get("DSOV") == 0
-        if SENT0_CONTINUE and sv == 0 and not dsov0 and o["state"] == "healthy_locked":
+        if sent0 and sv == 0 and not dsov0 and o["state"] == "healthy_locked":
             print("   SENT0 frame: DSOV=0x%08x CRC=0x%08x PLM=0x%08x sentinel 0 (init-phase partial; boot continues)" % (
                 r.get("DSOV", 0), r.get("CRC", 0), r.get("PLM", 0)), flush=True)
         elif bad(sv) or sv == 0xFFFFFFFF or (not dsov0 and (sv == 0 or (SENT_BASE[0] is not None and sv != SENT_BASE[0]))):
@@ -410,15 +411,15 @@ if True:
         if ok_rs and t_rs > 0.4: print("   link back after %.2f s (slow retrain)" % t_rs, flush=True)
         if ok_rs:
             with Bar0(BDF) as bar:
-                o = look(bar)
+                o = look(bar, SENT0_CONTINUE)
                 for _ in range(int(GFW_WAIT * 4)):   # GFW boot status 0x01: never go on while it boots; poll up to GFW_WAIT
                     if o["state"] != "booting": break
-                    time.sleep(0.25); o = look(bar)
+                    time.sleep(0.25); o = look(bar, SENT0_CONTINUE)
                 sk = None
                 if o["state"] == "booting":
                     sk, sregs, stxt = stall_read(bar)
                     print("   stall read (GFW still booting after %g s; reads only, no g/r/j): %s" % (GFW_WAIT, stxt), flush=True)
-                    if sk == "ready": o = look(bar); sk = None
+                    if sk == "ready": o = look(bar, SENT0_CONTINUE); sk = None
                 regs = dict(o["registers"])
                 out = verdict(o)
                 if sk is not None:

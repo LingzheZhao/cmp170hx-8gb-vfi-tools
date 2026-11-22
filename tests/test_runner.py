@@ -358,6 +358,10 @@ class RunnerTest(unittest.TestCase):
         rc, out, ev = run([CELL3], "huu", SENT0_CONTINUE="1")
         self.assertEqual(rc, 10, out)                                   # an error value still poisons
         self.assertIn("hidden-poison alias 0x820410=0xbadf1020", out)
+        rc, out, ev = run([CELL3], "uuu", SENT0_CONTINUE="1", FAKE_BASE="z")
+        self.assertEqual(rc, 9, out)                                    # never for the pre-shot baseline
+        self.assertIn("STOP: unsafe pre-shot fuse baseline", out)
+        self.assertFalse(shots(ev))
 
     def test_every_step_validated_before_the_first_shot(self):
         for bad_step in ([300, -60], [450, -60, 3, 198, 900], [450, -60, 3, 198, 750, 8], [450, -60, 3, 198, 750, 1, 1, 21],

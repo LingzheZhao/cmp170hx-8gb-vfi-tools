@@ -481,6 +481,16 @@ class SnapTests(unittest.TestCase):
             self.assertEqual(len(files), 1)
             self.assertEqual(os.stat(os.path.join(d, "s", files[0])).st_mode & 0o777, 0o600)
 
+    def test_untrusted_row_read_is_a_failure(self):
+        import vfi_snap
+        self.assertEqual(vfi_snap.snapshot_rc({}), 0)                                   # no --rows
+        self.assertEqual(vfi_snap.snapshot_rc({"rows_match": True, "state_unchanged_by_row_read": True}), 0)
+        for bad in ({"rows_match": False, "state_unchanged_by_row_read": True},
+                    {"rows_match": True, "state_unchanged_by_row_read": False},
+                    {"rows_error": "CMD_READ timeout at row 3"}):
+            with self.subTest(bad=bad):
+                self.assertEqual(vfi_snap.snapshot_rc(bad), 1)
+
     def test_poisoned_stops_before_other_reads(self):
         with tempfile.TemporaryDirectory() as d:
             rc, out = run_tool("vfi_snap", ["--bdf", BDF, "--resource", self._bar(d, 0xBADF510E),

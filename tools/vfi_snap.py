@@ -46,6 +46,13 @@ TPC_DEFECTIVE = [0x8205C8, 0x820508, 0x82050C, 0x820514, 0x820564, 0x8205AC, 0x8
 TPC_RECONFIG = [0x820788, 0x82078C, 0x820790, 0x820794, 0x820798, 0x82079C, 0x820B94, 0x820B90]
 
 
+def snapshot_rc(out: dict) -> int:
+    """1 when a --rows read cannot be trusted: it failed, the two passes differ, or the gate/status registers changed
+    during the read. A plan must never be built from such a snapshot."""
+    bad = out.get("rows_error") or out.get("rows_match") is False or out.get("state_unchanged_by_row_read") is False
+    return 1 if bad else 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--bdf", type=vc.bdf_type, default=os.environ.get("VFI_BDF"), required=not os.environ.get("VFI_BDF"),
@@ -207,7 +214,7 @@ def snapshot(a, ident, cfg_cmd, mv32) -> int:
     for w in warn:
         print("  WARN: " + w)
     print("  saved " + fn + " (0600; keep it private)")
-    return 1 if out.get("rows_error") else 0
+    return snapshot_rc(out)
 
 
 if __name__ == "__main__":

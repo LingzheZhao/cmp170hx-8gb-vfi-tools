@@ -180,7 +180,9 @@ run log. Keep the journal on the person's machine; it can hold card identities.
 ## Working on this repository
 
 - Run the tests before you propose a change: `GA100VFI_HOST=<pico-ga100vfi>/host python3 -I -m unittest discover -s
-  tests`, where `<pico-ga100vfi>` is a checkout at `e1ebd97` with all of `firmware/*.patch` applied. All must pass.
+  tests`, where `<pico-ga100vfi>` is a checkout at `e1ebd97` with all of `firmware/*.patch` applied. The host package
+  needs `pyserial` (`pip install pyserial`, or use the bench venv's python). The planner has its own suite:
+  `cd tools/planner && python3 -I -m unittest discover -s tests`. All must pass.
 - Match the style around you: plain words, no em dashes, numbers with units.
 - Never commit settings with hosts, passwords or card identities (`bench.conf` is in `.gitignore`).
 - Do not push or open pull requests unless the person asks.

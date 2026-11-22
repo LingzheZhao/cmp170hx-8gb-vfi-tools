@@ -528,6 +528,10 @@ class RunDriverTest(unittest.TestCase):
                 (("MISTIMED at step 0 shot 0 (v=375): release_at=9 us; outcome under. Not scored", 14), 3, "mistimed"),
                 (("TIPPED at step 0 shot 1 (v=375): unread (FUSECTRL: unexpected non-idle value). Power cycle", 10), 3, "unknown outcome"),
                 (("TEMP GATE FAILED: temp_raw 300", 16), 3, "unknown outcome"),
+                ((">>> GOLDILOCKS HELD (t)\nHOLD LINE BUT RUNNER RC 124", 124), 3, "unconfirmed hold"),
+                (("HOLD SEEN\nTIPPED at step 0 (t): lost", 10), 3, "unconfirmed hold"),
+                ((">>> STALL DSOV0 HELD (t)", 0), 3, "unconfirmed stall hold"),
+                ((">>> PARTIAL HELD (t)", 1), 3, "unconfirmed partial hold"),
                 (("Traceback (most recent call last):", 1), 3, "unknown outcome")):
             with self.subTest(text=boot[0][:30]):
                 self.reset_fake()

@@ -1193,11 +1193,17 @@ RE_TIP = re.compile(r"^TIPPED at step (\d+)(?: shot \d+)? \([^)]*\): (.*)$", re.
 def classify_boot(out, rc):
     """(what, step index or None, text) for one bootrun.sh call."""
     if re.search(r"^>>> GOLDILOCKS HELD|^HOLD SEEN", out, re.M):
+        if rc != 0:
+            return "unknown", None, "unconfirmed hold: launcher exit %d, expected 0" % rc
         return "goldilocks", None, ""
     m = re.search(r"^>>> STALL DSOV0 HELD.*$", out, re.M)
     if m:
+        if rc != 15:
+            return "unknown", None, "unconfirmed stall hold: launcher exit %d, expected 15" % rc
         return ("goldilocks" if "goldilocks signature" in m.group(0) else "partial"), None, m.group(0)
     if re.search(r"^>>> PARTIAL HELD", out, re.M):
+        if rc != 13:
+            return "unknown", None, "unconfirmed partial hold: launcher exit %d, expected 13" % rc
         return "partial", None, ""
     if re.search(r"MISTIMED at", out):
         return "mistimed", None, ""

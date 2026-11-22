@@ -626,7 +626,8 @@ def classify(shot):
         if r_:
             return "poison", "POISON, the reset did not clear it (%s)" % r_[:40]
         return "poison", "POISON (controller wedged)"
-    d = shot.get("cell", {})
+    # the cell counts ride on the cell's last shot: use them only for a shot that carries nothing of its own
+    d = {} if (kind or shot.get("frame") or st) else shot.get("cell", {})
     if d.get("lost") or st.strip().startswith("lost") or kind == "lost":
         return "lost", "lost link"
     fr = shot.get("frame")

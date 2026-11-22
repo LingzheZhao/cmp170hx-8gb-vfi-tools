@@ -277,6 +277,17 @@ class Classify(unittest.TestCase):
         self.assertEqual([x.split("-> ")[1].split(" (")[0] for x in lines],
                          ["under", "light", "over", "GOLDILOCKS"])
 
+    def classify_text(self, text):
+        e = {k: v for k, v in os.environ.items() if not k.startswith("CIMP_")}
+        p = subprocess.run([sys.executable, "-I", CIMP, "classify"], input=text, env=e, capture_output=True, text=True)
+        return [x.split("-> ")[1] for x in p.stdout.strip().splitlines()]
+
+    def test_a_cell_loss_does_not_relabel_the_last_shot(self):
+        g = "   glitch vd=450 td=-60 vr=750 tr=-20 tv=0 fast=1 hold=0 pulses=3 pw=198 gap=150 delay=117 revert=0 dither=0\n"
+        text = (g + "SHOT n=0 step=0 v=450 kind=lost FUSECTRL=0xffffffff | lost\n"
+                "step 0 shot 0 v=450 td=-60 pw=198 vr=750 f=1: lost\n" + g + "SHOT n=1 step=0 v=450 kind=under | under\n"
+                "cell 0 v=450 td=-60 np=3 pw=198 vr=750: {'under': 1, 'lost': 1, 'partial': 0, 'other': 0}\n")
+        self.assertEqual(self.classify_text(text), ["lost link", "under (no effect)"])
 
 if __name__ == "__main__":
     unittest.main(verbosity=1)

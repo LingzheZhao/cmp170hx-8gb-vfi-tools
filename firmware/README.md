@@ -1,6 +1,6 @@
 # Firmware and host patches for pico-ga100vfi
 
-Eleven changes to [dalzyu/pico-ga100vfi](https://github.com/dalzyu/pico-ga100vfi), made against commit `e1ebd97`.
+Twelve changes to [dalzyu/pico-ga100vfi](https://github.com/dalzyu/pico-ga100vfi), made against commit `e1ebd97`.
 Apply them with `git am`:
 
 ```sh
@@ -176,6 +176,16 @@ flight cannot move it. push3 drops only that refusal: the first such write is na
 accepts runs identically. This is what lets a long dip keep the rail low at the release and bring it back a few µs
 after it, the shot that finished card E. Details, the host simulation (`../tools/hostsim`, 90 of 90), the bench
 proof and a flashing trap: `../docs/PUSH3.md`.
+
+## 0012: `Bar0.wr32` writes one aligned 32-bit store
+
+`struct.pack_into` zeroes its destination before it packs, so upstream's `wr32` stored `0x00000000` to the register
+and then the value: on the BAR0 mmap every `wr32` briefly cleared the whole register. With a reader on a shared mmap
+the zero showed up in about 15 % of reads on Python 3.12. The patch writes through a 4-byte `memoryview` cast: one
+aligned store, nothing in between. `rd32` already does a single load. In this repo `wr32` is used only by the opt-in
+`DSOV_SET` write in classify (off by default since `0005`) and by `../tools/diag/enswtest.py`, so the lab's shots
+never went through it; any tool that writes a live register with it (a PCIe PHY register, for example) did. Host
+only, the firmware is unchanged.
 
 ## Not a firmware change: park and rescue
 

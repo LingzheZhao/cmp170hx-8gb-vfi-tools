@@ -1,0 +1,36 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: darkmaniac7 <31073889+darkmaniac7@users.noreply.github.com>
+Date: Sun, 22 Nov 2026 00:53:42 -0600
+Subject: [PATCH] host: Bar0.wr32 writes one aligned 32-bit store
+
+struct.pack_into zeroes its destination before it packs. On the BAR0
+mmap that is a store of 0x00000000 to the register, then the value, so
+every wr32 briefly cleared the whole register. With a reader on a shared
+mmap the zero showed up in about 15 % of reads on Python 3.12.
+
+Write through a 4-byte memoryview cast instead: one aligned store and
+nothing in between. rd32 already does a single load.
+---
+ host/ga100vfi/bar0.py | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/host/ga100vfi/bar0.py b/host/ga100vfi/bar0.py
+index 19677ba..9bdac7b 100644
+--- a/host/ga100vfi/bar0.py
++++ b/host/ga100vfi/bar0.py
+@@ -73,7 +73,11 @@ class Bar0:
+         return struct.unpack_from("<I", self.mm, off)[0]
+ 
+     def wr32(self, off: int, value: int) -> None:
+-        struct.pack_into("<I", self.mm, off, value & 0xFFFFFFFF)
++        # One aligned 32-bit store. struct.pack_into zeroes its destination
++        # before packing, which on this mmap is a write of 0 to the register.
++        mv = memoryview(self.mm)[off:off + 4].cast("I")
++        mv[0] = value & 0xFFFFFFFF
++        mv.release()
+ 
+     def close(self) -> None:
+         self.mm.close()
+-- 
+2.43.0
+

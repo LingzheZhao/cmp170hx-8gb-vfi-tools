@@ -130,7 +130,7 @@ holds SCL from the release; after a shot that leaves READ_VOUT below 500 the fir
 card's brown-out floor and changed nothing there. The dither and SCL hold runs on push1 had a write overlapping the
 release (a clean test needs push2), and a hold that starts at the release has not been run.
 
-## 0009: push2, the current firmware
+## 0009: push2 (0011, push3, is the current firmware)
 
 Release timing:
 

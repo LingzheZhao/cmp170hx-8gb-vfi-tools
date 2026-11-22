@@ -8,9 +8,10 @@ Default mode: BAR0 READS ONLY, no register or config-space writes. FUSECTRL is r
 FUSEADDR (0x820004) and FUSECTRL = 1 (CMD_READ), then restores FUSEADDR. It never writes DEBUGCTRL (0x820060),
 never selects RIR rows and never programs anything. Both passes must match.
 
---die-id DUMP reads fuse rows 8-15 (the die ID) once with the same CMD_READ and compares them with the ff_rows of DUMP,
-the 512-row dump a burn plan was made from. Cards with the same GPC/SM/ceiling pass every other identity check; these
-rows tell them apart. Exit 5 when they differ. Only row numbers are printed, never the values.
+--die-id DUMP reads fuse rows 8-15 (the die ID) once with the same CMD_READ and compares them with DUMP, the 512-row
+dump a burn plan was made from (its ff_rows, or the rows of a --rows snapshot whose two passes matched). Cards with the
+same GPC/SM/ceiling pass every other identity check; these rows tell them apart. Exit 5 when they differ. Only row
+numbers are printed, never the values.
 
 Run it on a healthy card (fresh boot, or right after vfi_park.py) or on a state held by vfi_hunt.py. With --port
 the rail is checked over I2C first and config space is not touched if the GPU is in brown-out.
@@ -76,9 +77,16 @@ def read_fuse_rows(rd, wr, idle, rows, timeout=0.2):
 
 
 def load_die_id(path):
-    """The die ID rows (8-15) of a dump's ff_rows, as ints."""
+    """The die ID rows (8-15) of a 512-row dump, as ints: a dump's ff_rows, or the rows list this tool's --rows writes
+    (only when its two passes matched)."""
     with open(path) as f:
-        rows = json.load(f).get("ff_rows", {})
+        d = json.load(f)
+    rows = d.get("ff_rows")
+    if rows is None and isinstance(d.get("rows"), list):
+        if d.get("rows_match") is not True:
+            raise vc.BenchStop(f"{path}: the two passes of its row read differed; use a dump whose passes matched")
+        rows = {str(i): v for i, v in enumerate(d["rows"])}
+    rows = rows or {}
     want = {}
     for r in DIE_ID_ROWS:
         v = rows.get(str(r))
@@ -106,7 +114,7 @@ def main() -> int:
     ap.add_argument("--port", default=None, help="Pico serial port: check the rail over I2C before any config read")
     ap.add_argument("--rows", action="store_true", help="also read the 512 main fuse rows twice (CMD_READ only)")
     ap.add_argument("--die-id", metavar="DUMP", help="also read fuse rows 8-15 (the die ID, CMD_READ only) and compare "
-                    "them with DUMP's ff_rows; exit 5 when they differ (a different card)")
+                    "them with DUMP's (ff_rows, or a --rows snapshot); exit 5 when they differ (a different card)")
     ap.add_argument("--label", default="snap")
     ap.add_argument("--outdir", default="vfi-snaps")
     ap.add_argument("--allow-10gb", action="store_true", help="allow a 10 GB card (10de:2082), read-only use")

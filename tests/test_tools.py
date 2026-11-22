@@ -543,6 +543,13 @@ class SnapTests(unittest.TestCase):
                 json.dump({"ff_rows": {str(i): "%#010x" % other.get(i, 0) for i in range(512)}}, fh)
             want = vfi_snap.load_die_id(p)
             self.assertEqual([r for r in vfi_snap.DIE_ID_ROWS if got[r] != want[r]], [8, 9])
+            with open(p, "w") as fh:                                                   # this tool's own --rows file
+                json.dump({"rows": ["%#010x" % other.get(i, 0) for i in range(512)], "rows_match": True}, fh)
+            self.assertEqual(vfi_snap.load_die_id(p), want)
+            with open(p, "w") as fh:
+                json.dump({"rows": ["%#010x" % other.get(i, 0) for i in range(512)], "rows_match": False}, fh)
+            with self.assertRaises(vc.BenchStop):
+                vfi_snap.load_die_id(p)
             with open(p, "w") as fh:
                 json.dump({"ff_rows": {"0": "0x0"}}, fh)                                # not a full dump
             with self.assertRaises(vc.BenchStop):

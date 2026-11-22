@@ -60,7 +60,8 @@ burns fuses: it glitches and reads, and it stops and hands over to you when a go
 | `./cimp watch` | A live panel in a second terminal: the phase in plain words (POWER CYCLE, BOOTING, PREFLIGHT, TEMP GATE, SHOOTING, HOLD with a bell), the temperature and which way it is going, a fan cue (fan UP, fan DOWN, leave it), and the last eight shots as words. `--log` gives one line per change. |
 | `./cimp ladder`, `./cimp classify` | What each frame means; name every shot in a log. |
 
-Every boot it runs goes through the same checks before a shot is fired: a fresh-boot guard, the plan files' checksums
+Every boot it runs goes through the same checks before a shot is fired: a fresh-boot guard (a short uptime and a boot
+id that changed across the power cycle), the plan files' checksums
 on both machines, a preflight (firmware marker, who owns the rail, the card's VRM profile, no driver), the card's
 identity (GPC and SM masks) **and, since 2026-11-22, its die ID**: fuse rows 8 to 15 must match the dump your plan was
 made from. Two of the lab's cards reported identical masks, and only the die ID told them apart. Then a two-sided
@@ -383,7 +384,9 @@ privilege mask stuck at `0xFFFFFEFE`; a sense on one of them poisoned the contro
   `FLOOR` or above 825 mV and recovery outside 575-825 mV, and the hunter's step check refuses the same; a bad step
   stops the runner before the first shot with a `STOP: step ...` line and exit 2.
 - **No driver, no lockdown.** The tools stop if the card is bound to anything but `pci-stub` (or nothing), if the
-  `nvidia` module is loaded while the card is not held by `pci-stub`, or if kernel lockdown is on.
+  `nvidia` module is loaded while the card is not held by `pci-stub`, or if kernel lockdown is on. `bootrun.sh` also
+  stops when `nvidia` or `nouveau` is loaded at all, checks from sysfs that a configured `bdf` is a `10de:20c2` card
+  before any config access, and turns on only the memory-decode bit.
 - **Reads only.** The snapshot is BAR0 reads only by default. `--rows` writes nothing but FUSEADDR and the READ
   command to FUSECTRL, behind an allowlist, never DEBUGCTRL, and restores FUSEADDR. Fuse dumps and the upstream
   campaign's goldilocks log identify the card: keep them private. `tools/diag/enswtest.py` writes EN_SW_OVERRIDE on

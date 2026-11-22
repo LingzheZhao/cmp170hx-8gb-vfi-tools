@@ -74,10 +74,9 @@ Poison (0xBADF/0xBAD0, hidden poison; a FUSECTRL poison only without POISON_RESE
 (STATUS_WORD OFF bit, READ_VOUT below 500 mV) always
 end the boot: power cycle before the next shot.
 Exit codes: 0 sequence done or goldilocks held, 2 usage, a step out of range, firmware, unlock readback or a step the
-firmware refused,
-7 park failed before a step, 9 controller off or unsafe baseline (power cycle), 10 tipped, 11 nack or failed writes
-(the shot's state is unknown), 12 no dip (the controller dropped the shot), 13 partial held, 14 mistimed,
-15 DSOV 0 during a GFW stall held (a goldilocks signature in a stall included)."""
+firmware refused, 7 park failed (before a step, or after the last one), 9 controller off or unsafe baseline (power
+cycle), 10 tipped, 11 nack or failed writes (the shot's state is unknown), 12 no dip (the controller dropped the
+shot), 13 partial held, 14 mistimed, 15 DSOV 0 during a GFW stall held (a goldilocks signature in a stall included)."""
 import re, sys, time, subprocess, json, shlex, tempfile
 from ga100vfi.glitch import Attempt, Card
 from ga100vfi.bar0 import Bar0, restore
@@ -552,4 +551,6 @@ if last_stall[0]:
     print("   no park: GFW is still booting after the last shot (power cycle)", flush=True)
 else:
     rc_, pl_ = park(card); print("   park: rc %d %s" % (rc_, pl_), flush=True)
+    if rc_ != 0:
+        print("PARK FAILED after the last step: %s; stop (power cycle before anything else)" % pl_); sys.exit(7)
 print("sequence exhausted, no hold (%d shots%s)" % (nshots[0], "; " + ended[0] if ended[0] else "") if CONT else "sequence exhausted, all under")

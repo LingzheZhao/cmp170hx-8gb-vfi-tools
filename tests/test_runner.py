@@ -150,6 +150,15 @@ class RunnerTest(unittest.TestCase):
         park = ev.index("PARK")
         self.assertNotIn("OPEN /dev/ttyACM0", ev[park:])               # no reopen or unlock after a failed park
 
+    def test_failed_final_park_is_not_sequence_done(self):
+        rc, out, ev = run([STD], "u", FAKE_PARK_RC=4)
+        self.assertEqual(rc, 7, out)
+        self.assertIn("PARK FAILED after the last step", out)
+        self.assertNotIn("sequence exhausted", out)
+        rc, out, ev = run([CELL3], "uuu", FAKE_PARK_RC=3)
+        self.assertEqual(rc, 7, out)
+        self.assertNotIn("sequence exhausted", out)
+
     def test_park_each_closes_the_tty(self):
         rc, out, ev = run([STD, [444] + STD[1:]], "uu", PARK_EACH=1)
         self.assertEqual(rc, 0, out)

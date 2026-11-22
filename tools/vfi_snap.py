@@ -111,7 +111,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--bdf", type=vc.bdf_type, default=os.environ.get("VFI_BDF"), required=not os.environ.get("VFI_BDF"),
                     help="PCI address of the card (or set VFI_BDF)")
-    ap.add_argument("--port", default=None, help="Pico serial port: check the rail over I2C before any config read")
+    ap.add_argument("--port", default=os.environ.get("VFI_PORT"),
+                    help="Pico serial port: check the rail over I2C before any config read (or set VFI_PORT)")
     ap.add_argument("--rows", action="store_true", help="also read the 512 main fuse rows twice (CMD_READ only)")
     ap.add_argument("--die-id", metavar="DUMP", help="also read fuse rows 8-15 (the die ID, CMD_READ only) and compare "
                     "them with DUMP's (ff_rows, or a --rows snapshot); exit 5 when they differ (a different card)")
@@ -128,8 +129,9 @@ def main() -> int:
     if a.port:
         with vc.open_card(a.port) as card:
             e1, mv = vc.rail(card)
-        if e1 == vc.E1_GPU and mv < vc.HEALTHY_MV:
-            raise vc.BenchStop(f"GPU asks for {mv} mV (brown-out): config NOT read; run vfi_rescue.py")
+        if mv < vc.HEALTHY_MV:   # whoever owns the rail (GPU, PMBus, unknown): a low rail is a brown-out
+            who = "GPU asks for" if e1 == vc.E1_GPU else f"rail at (E1={e1:#06x})"
+            raise vc.BenchStop(f"{who} {mv} mV (brown-out): config NOT read; run vfi_rescue.py")
         print(f"rail: E1={e1:#06x} READ_VOUT {mv} mV")
     p = vc.sysfs(a.bdf)
     cfg = (p / "config").read_bytes()[:8]

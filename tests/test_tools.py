@@ -568,6 +568,29 @@ class SnapTests(unittest.TestCase):
             with self.subTest(bad=bad):
                 self.assertEqual(vfi_snap.snapshot_rc(bad), 1)
 
+    def test_rail_check_before_config_read(self):
+        # the README exports VFI_PORT and calls vfi_snap.py without --port; a low rail stops before config space
+        from pathlib import Path
+        for e1, label in ((vc.E1_GPU, "GPU asks for 301 mV"), (vc.E1_PMBUS, "rail at (E1=0xc2fa) 301 mV")):
+            with self.subTest(e1=hex(e1)), tempfile.TemporaryDirectory() as d:
+                sim = Sim()
+                sim.e1 = e1
+                sim.read_vout = lambda: 301
+                saved, old = vc.sysfs, os.environ.get("VFI_PORT")
+                vc.sysfs = lambda bdf: Path(d) / "no-device"             # a config read would fail with an I/O error
+                os.environ["VFI_PORT"] = "/dev/fake"
+                try:
+                    with Rig(sim):
+                        rc, out = run_tool("vfi_snap", ["--bdf", BDF, "--outdir", os.path.join(d, "s")])
+                finally:
+                    vc.sysfs = saved
+                    if old is None:
+                        os.environ.pop("VFI_PORT")
+                    else:
+                        os.environ["VFI_PORT"] = old
+                self.assertEqual(rc, 3, out)
+                self.assertIn(label + " (brown-out): config NOT read", out)
+
     def test_poisoned_stops_before_other_reads(self):
         for ctrl in (0xBADF510E, 0xBAD00100):
             with self.subTest(fusectrl=hex(ctrl)), tempfile.TemporaryDirectory() as d:

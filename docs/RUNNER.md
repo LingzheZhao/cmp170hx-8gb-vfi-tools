@@ -49,7 +49,8 @@ when the firmware writes the stock 787.5 mV after the train (0 to 20000 µs); ov
 (`docs/OVERLAP_EDGE.md`). `revert` is 0 or 2 (one-VID dither); 1 is
 refused because the no-dip check needs the rail under PMBus control after the shot. `fast` 2..7, `hold_ms` > 0,
 `t_restore` <= -1000 and `revert` 2 are the knobs of `firmware/0008`. Every step is checked before the first shot
-(v >= `FLOOR`, v_restore 575 to 825, delay 0 to 900, gap 36 to 2000, the knob ranges). The firmware uses `td` and
+(`FLOOR` <= v <= 825, v_restore 575 to 825, delay 0 to 900, gap 36 to 2000, tv 0 to 20000, the knob ranges); a bad
+step stops the run with a `STOP: step ...` line and exit 2. The firmware uses `td` and
 `delay` only as `td - delay`; some delays put a write across the release and push2 refuses them before anything is
 written (`docs/METHOD.md`, section 5). Order the steps from the weakest effect to the strongest.
 
@@ -132,16 +133,16 @@ the GPU's own rail control (PWM-VID, about 694 mV on card H) where every later s
 PMBus, and it behaved differently on the lab's cards; the tally does not count it.
 
 On GOLDILOCKS the runner prints `>>> GOLDILOCKS HELD (<tag>) v=.. td=..` and exits 0 without parking: the rail stays
-under PMBus control and the state stays readable. It is a passive candidate: validate it actively before anything
-else. A finished sequence and a tipped run end with a park. A held goldilocks, partial or stall, a GFW that is still
-booting (also after the last shot of a sequence), a mistimed goldilocks (left for review) and the stops for
+under PMBus control and the state stays readable. It is a passive candidate: validate it actively before anything else.
+A finished sequence and a tipped run end with a park; when the park after the last step fails, the run ends with
+`PARK FAILED after the last step` and exit 7, not `sequence exhausted`. A held goldilocks, partial or stall, a GFW that is
+still booting (also after the last shot of a sequence), a mistimed goldilocks (left for review) and the stops for
 controller off, no dip, a cut-off reply and a refused shot do not park: power-cycle. Poison and a controller latch
-always end the boot. After a failed park the root port's link and error lines are logged from a
-read-only `lspci -vv`.
+always end the boot. After a failed park the root port's link and error lines are logged from a read-only `lspci -vv`.
 
-Exit codes: 0 sequence done or goldilocks held, 2 usage, firmware, unlock readback or a refused step, 7 park failed
-before a step, 9 controller off or unsafe baseline, 10 tipped, 11 nack or failed writes, 12 no dip, 13 partial held,
-14 mistimed, 15 DSOV 0 held during a GFW stall.
+Exit codes: 0 sequence done or goldilocks held, 2 usage, firmware, unlock readback, a step out of range or a refused
+step, 7 park failed (before a step, or after the last one), 9 controller off or unsafe baseline, 10 tipped, 11 nack or
+failed writes, 12 no dip, 13 partial held, 14 mistimed, 15 DSOV 0 held during a GFW stall.
 
 Environment: `VFI_BDF` (required), `VFI_PORT`, `VFI_PARK`, `VFI_TRACE_DIR`, `FLOOR` (lowest dip, default 381 mV),
 `REPEAT`, `SHOTCAP`, `LOSTRUN`, `CELLLOST`, `RESTORE_WAIT`, `GFW_WAIT` (default 5 s), `SENTINEL` (0 turns it off),

@@ -62,21 +62,35 @@ Go one step at a time, and say what each step is for. Confirm each before moving
 3. Dry run: `./cimp hunt run <plan.json> --card <label>`. The first time, show the person the summary and get a yes.
 4. Run it: the same with `--execute`, in a `tmux`/`screen` session or in the background, so it survives your turn.
 5. Follow it: `./cimp watch --log` (one line per change of phase, temperature, fan cue or shot).
-6. When it ends: read the last line and the exit code (table below), then `./cimp hunt tally <run dir>`. Read its
-   "Next" block and plan the next phase.
+6. When it ends: read the last line and the exit code of `./cimp hunt run` (first table below), then
+   `./cimp hunt tally <run dir>`. Read its "Next" block and plan the next phase.
 7. Write a journal entry (below). Then go round again.
 
-Exit codes of a run (`tools/runner/bootrun.sh`):
+Exit codes of `./cimp hunt run` (the hunter):
+
+| Code | Meaning | You |
+|---|---|---|
+| 0 | plan done, nothing held (or a dry run) | tally, plan the next phase |
+| 1 | cimp refused to start (the profile is incomplete) | fix the profile; `./cimp config --test` |
+| 2 | plan refused (an illegal step, or shoot-through without `--owner-ok-shoot-through`) | fix the plan, or ask the person |
+| 3 | stopped: poison (default), a latch, a mistimed shot, no dip, `--max-boots`, a STOP file, or a launcher stop | read the last `RUN:` line and the boot's output; a launcher stop reads `unknown outcome: bootrun exit N`, with N from the second table |
+| 4 | a frame is held: a goldilocks, or a DSOV-0 partial or stall frame | "On a hold" for a goldilocks; for a partial or stall frame stop and report |
+
+The run directory holds `run.log` (one line per boot and its `RESULT`/`TIPPED`/hold lines) and, per boot,
+`boot-NN.out` (everything that boot printed) and `boot-NN.log` (the launcher's log). A `RESULT: ... (runner rc N)`
+line carries the runner's code.
+
+Exit codes of one boot (`tools/runner/bootrun.sh`):
 
 | Code | Meaning | You |
 |---|---|---|
 | 0 | sequence done, or a goldilocks held | on a hold: "On a hold" |
-| 1, 7 | the bench never came up / did not power off | ask the person to check the power |
+| 1, 7 | the bench never came up / did not power off; 7 is also the runner's `PARK FAILED` (the card was not handed back) | check the power with the person; on `PARK FAILED` stop and report |
 | 2 | usage or config | fix the config; `./cimp config --test` |
 | 3 | host guard or preflight failed | read the preflight lines (troubleshooting below) |
 | 4 | plan checksum mismatch | stop: the plan changed since it was reviewed |
 | 5 | identity or die ID mismatch | stop: a different card is in the slot |
-| 6 | not a fresh boot | power-cycle and run again |
+| 6 | not a fresh boot (up longer than `fresh_max`, or the boot id did not change across the power cycle) | check that the power control really cycles the bench, then run again |
 | 8 | runner transfer failed | ssh or disk problem on the bench host |
 | 9 | the voltage controller latched off | power cycle; tell the person |
 | 10 | tipped (a lost shot, a poison, a run of losses) | normal; the next boot goes on |

@@ -147,6 +147,10 @@ class LegalityTest(unittest.TestCase):
         p = plan_of("train", "--from", "344", "--to", "331", "--floor", "331")
         self.assertEqual(p["env"]["FLOOR"], 331)
 
+    def test_vr_help_shows_the_phase_default(self):
+        self.assertIn("(default 625)", hunt("overlap", "--help")[1])   # overlap's set_defaults(vr=625)
+        self.assertIn("(default 750)", hunt("train", "--help")[1])
+
     def test_check_subcommand(self):
         rc, out = hunt("check", json.dumps([[375, 62, 1, 198, 750, 0, 2, 0, -20, 0, 117, 150]]), "-v")
         self.assertEqual(rc, 0, out)

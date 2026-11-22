@@ -1366,7 +1366,7 @@ def main(argv=None):
     def plan_opts(sp, reps, pw=DEFAULT_PW):
         sp.add_argument("--reps", type=int, default=reps, help="counted shots per cell (default %d)" % reps)
         sp.add_argument("--pw", type=int, default=pw, help="pulse width, us (default %d)" % pw)
-        sp.add_argument("--vr", type=int, default=DEFAULT_VR, help="restore level, mV (default 750)")
+        sp.add_argument("--vr", type=int, default=DEFAULT_VR, help="restore level, mV (default %(default)s)")
         sp.add_argument("--delay", type=int, default=DEFAULT_DELAY, help="firmware delay, us (default 117); s1 = td - delay")
         sp.add_argument("--gap", type=int, default=DEFAULT_GAP, help="gap between pulses, us (default 150)")
         sp.add_argument("--floor", type=int, default=338, help="lowest dip any step may command, mV; the plan's FLOOR (default 338)")

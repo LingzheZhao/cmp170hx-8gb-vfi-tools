@@ -53,7 +53,8 @@ Go one step at a time, and say what each step is for. Confirm each before moving
    - a stock card (`SM now=70`): the community train, `./cimp hunt train`, capped at one or two hundred shots, then
      the phases in order (`readmap`, `init`, `slow`, `overlap` on push3);
    - an already-burned card that needs one more record (`SM now` above 70): the single slow dip,
-     `./cimp hunt slow --v 381,375,368,362,356 --s1-from -55 --s1-to -55 --reps 3 --continue-sent0 --poison-reset`.
+     `./cimp hunt slow --v 381,375,368,362,356 --s1-from -55 --s1-to -55 --reps 3 --continue-sent0 --poison-reset
+     --out g23.json` (without `--out` the hunter prints the plan's summary and writes no file).
 
 ## The loop
 

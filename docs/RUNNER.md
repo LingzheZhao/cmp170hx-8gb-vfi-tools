@@ -71,7 +71,8 @@ written (`docs/METHOD.md`, section 5). Order the steps from the weakest effect t
   AGENTS.md forbids `r` while the GFW boot status is `0x01`. Once GFW is ready it sends one 100 ms `PEX_RST` pulse at
   the stock rail and needs the same healthy locked read as `LOST_NOPARK` (FUSECTRL idle `0xE0040000`, GFW ready,
   DSOV 1, CRC `0x55`, full mask, sentinel). Then the boot goes on and the log says `poison reset (100 ms PEX_RST):
-  healthy_locked`. Anything else, or a GFW that never finishes, ends the boot (exit 10) as before. Hidden poison and the
+  healthy_locked`. Anything else, or a GFW that never finishes, ends the boot (exit 10) as before; when GFW never
+  finishes the boot ends without a park, since the park pulses `PEX_RST` too. Hidden poison and the
   readable `poisoned/over0` frame are never reset. On the lab's card C a `0xBADF510E` poison was sticky (GFW finished
   booting in under a second, FUSECTRL stayed poisoned for 15 s) and one pulse returned a full cold-boot match: 2 of 2
   in standalone tests, then 64 of 64 in one 129-shot boot, about 6 s each instead of a power cycle. A glitch shot's
@@ -111,12 +112,15 @@ After every shot the runner checks, in order:
    **stall**, and the runner reads once more, read-only: FUSECTRL first (a `0xBADF` or `0xBAD0` value is poisoned and
    ends the boot; a busy FUSECTRL ends it too), then GFW, DSOV, CRC, the mask and the sentinel, logged as
    `stall read (...)`. A stall with DSOV 0 is held (`>>> STALL DSOV0 HELD`, exit 15), whatever else it shows: a
-   goldilocks signature in a stall is not a finished boot. The one exception is a DSOV-0 stall that is not a
+   goldilocks signature in a stall is not a finished boot. A mistimed shot that shows DSOV 0 in a stall is MISTIMED
+   instead (exit 14, no park), never a held goldilocks. The one exception is a DSOV-0 stall that is not a
    goldilocks signature with `PARTIAL_CONTINUE=1` and `SHOOT_THROUGH_STALLS=1`, which is logged as `STALL PARTIAL`.
 8. The `SENTINEL` alias register (default `0x820410`). With DSOV 1 it must equal the boot's baseline; `0`, all-ones,
    `0xBAD.....` or any other value is **hidden-poison**. With DSOV 0 the option shadows have not been sensed and the
    alias reads 0 in a real goldilocks (one real goldilocks frame on card G was thrown away before this rule), so then
-   only all-ones or a `0xBAD.....` value is poison. A stall read logs the sentinel and never scores it.
+   only all-ones or a `0xBAD.....` value is poison. A stall read logs the sentinel and never scores it. With
+   `SENT0_CONTINUE=1` a DSOV-1 frame whose sentinel reads exactly 0 after a shot is logged as a `SENT0 frame` and the
+   boot goes on; that never applies to the pre-shot baseline or to the read after a recovery or poison reset.
 9. The verdict: DSOV 1 with CRC `0x55` and a full mask is **under**; DSOV 0 with CRC `0x55`, a full mask and a clean
    sentinel is **GOLDILOCKS**; CRC 0 with mask 0 is **poisoned/over0**; anything else is printed as read
    (`dsov1 crc=0x77 priv=..`, `dsov0 crc=0x55 priv=0xfffffefe`, ...), so a CRC change after a shot shows.

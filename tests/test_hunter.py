@@ -156,6 +156,9 @@ class LegalityTest(unittest.TestCase):
         self.assertIn("in flight across the PEX_RST release", out)
         rc, out = hunt("check", json.dumps([350, 30, 1, 36, 825, 0, 3, 0, -20, 0, 124, 150]), "--pw-min", "36")
         self.assertEqual(rc, 0, out)                            # card G's single slow dip: legal at the firmware floor
+        rc, out = hunt("check", json.dumps([[3810, -60, 3, 198, 750, 1, 2, 0, -20, 0, 117, 150]]))
+        self.assertEqual(rc, 1, out)                            # a typo for 381: the firmware has no voltage limit
+        self.assertIn("above the runner's 825 mV ceiling", out)
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "p.json")
             rc, out = hunt("init", "--out", path)

@@ -17,6 +17,7 @@
 from . import schedule, steps as S
 from .vid import mv_to_code
 
+V_MAX = 825   # the runner refuses a dip above its highest restore (tools/runner/bisect_shots.py V_MAX)
 RUNNER_LIMITS = {"vr": (575, 825), "fast": (0, 7), "hold": (0, 20), "pulses": (1, 16), "delay": (0, 900),
                  "gap": (36, 2000)}
 
@@ -75,6 +76,8 @@ class Rules:
         why = []
         if d["v"] < self.floor_mv:
             why.append("below FLOOR %d mV" % self.floor_mv)
+        if d["v"] > V_MAX:
+            why.append("v %s above the runner's %d mV ceiling" % (d["v"], V_MAX))
         for k, (lo, hi) in RUNNER_LIMITS.items():
             if not lo <= d[k] <= hi:
                 why.append("%s=%s outside runner limits %d..%d" % (k, d[k], lo, hi))

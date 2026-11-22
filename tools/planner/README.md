@@ -189,14 +189,14 @@ ingest -> stop rules -> plan again. The default is a dry run that plans once and
 `--max-boots`, `--max-hours` (checked before each launch; a running launcher is never cut for budget);
 `--boot-timeout-min` kills a hung launcher by its own process group and stops.
 
-Stop rules, per boot: GOLDILOCKS HELD / HOLD SEEN, NO DIP, identity / preflight / plan checksum / fresh boot / power /
-runner transfer failure, Traceback, a runner `STOP:` line not covered below, CONTROLLER OFF the second time, a park
-failure in two consecutive boots, MISTIMED / ABORT in two consecutive boots, TEMP GATE FAILED three times in a row,
-an unexplained launcher exit. A park that fails right after a lost shot (the link is dead; the next fresh boot
-recovers it) does not count by default; `--park-fail-mode strict` counts it. A held partial is logged and the next
-plan densifies; `--stop-on-partial` stops instead. Every decision (plan, command, launch, result, ingest, event,
-wait, stop) is a line in `decisions.jsonl` and on stdout. Exit 0 for budget / planner done / goldilocks / dry run,
-3 for a stop that needs review.
+Stop rules, per boot: GOLDILOCKS HELD / HOLD SEEN, STALL DSOV0 HELD, NO DIP, identity / die ID / host guard / preflight
+/ plan checksum / fresh boot / power / runner transfer failure, Traceback, a runner `STOP:` line not covered below,
+CONTROLLER OFF the second time, a park failure in two consecutive boots, MISTIMED / ABORT in two consecutive boots,
+TEMP GATE FAILED three times in a row, an unexplained launcher exit. A park that fails right after a lost shot (the link is
+dead; the next fresh boot recovers it) does not count by default; `--park-fail-mode strict` counts it. A held partial is
+logged and the next plan densifies; `--stop-on-partial` stops instead. Every decision (plan, command, launch, result,
+ingest, event, wait, stop) is a line in `decisions.jsonl` and on stdout. Exit 0 for budget / planner done / goldilocks /
+dry run, 3 for a stop that needs review.
 
 Never run a hunt next to another script that drives the same bench.
 

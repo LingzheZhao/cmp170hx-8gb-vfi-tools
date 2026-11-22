@@ -36,7 +36,8 @@ this inference is the only way to show the phase there.
 Log layouts it reads: the hunter's (`<log_dir>/<run>/run.log` and `boot-NN.log`, written by `cimp hunt run` and
 `goldilocks_hunt.py run`) and a queue layout (`<log_dir>/<name>.log` with `######## <name> boot N [...]` headers and
 `<name>-bNN.raw` boot logs). It follows the newest run. If the logs live on another machine, set `runner_host`: `cimp
-watch` then streams itself over ssh and runs there (it needs only `python3` on that machine).
+watch` then streams itself over ssh and runs there (it needs only `python3` on that machine). `runner_host` does
+not move the hunt: `cimp hunt run` runs where you start it, so start it on that machine.
 
 Gate lines: `tools/runner/bootrun.sh` prints one `gate temp_raw=... want [TMIN, TSTART]` line per poll, so the panel
 shows the card warming or cooling into the band.
@@ -96,11 +97,11 @@ repository; `tools/cimp/config.example.json` shows the format with placeholders.
 | `glitch_cmdline` | `` | optional word that must be on the bench's /proc/cmdline (the glitch boot entry) |
 | `mask_pciehp` | `0` | 1: mask pciehp interrupts on a hotplug root port before the run |
 | `fresh_max` | `900` | refuse a run when the bench has been up longer than this, seconds |
-| `runner_host` | `local` | where the hunter runs and its logs live: local, or an ssh destination |
+| `runner_host` | `local` | where the hunter's logs live: local, or an ssh destination; it moves `cimp watch` only (`cimp hunt` runs where you start it: run cimp on that host) |
 | `repo_dir` | `` | path of this repository on the runner host (default: this checkout when local) |
 | `log_dir` | `hunt-logs` | runner log directory (relative paths are relative to repo_dir) |
 | `run_screens` | `` | screen/tmux session names that mean a run is active (empty: judge by log activity) |
-| `on_hold` | `` | command run on the controller when a goldilocks is held (empty: stop and report) |
+| `on_hold` | `` | command run on the controller when a goldilocks is held (empty: stop and report); `cimp hunt run` never runs it (`NO_ON_HOLD=1`), only a direct `bootrun.sh`, `campaign.sh` or `firstshot.sh` |
 | `card` | `` | default card label (the bench.conf function card_<label>) |
 | `tmin_c` | `39.5` | temperature gate, lowest start temperature, C (READ_TEMP1 / 10) |
 | `tstart_c` | `40.6` | temperature gate, highest start temperature, C (0 = no upper bound) |

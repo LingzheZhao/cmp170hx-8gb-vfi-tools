@@ -122,6 +122,28 @@ class TestHunt(HuntCase):
             self.assertTrue(self.h.stop_reason.startswith(why), (ev, self.h.stop_reason))
             self.assertEqual(self.h.boots, 1)
 
+    def test_stall_hold_host_guard_and_die_id_stop_at_once(self):
+        # firstshot.sh output: a held stall frame exits 13 and a host guard or die ID stop exits 2, both in OK_RC
+        self.hunt(EDGE_FAM)
+        hdr = "######## first-shot boot 1/2: [[362,-60,3,80,750,1,1]] 01:02:03"
+        for lines, rc, why in (
+                ([">>> STALL DSOV0 HELD (card e): a goldilocks signature (DSOV 0, CRC 0x55, full mask) while GFW is "
+                  "stalled; no sense, no next shot, no g/r/j; review it", "FIRSTSHOT: partial held for read-only inspection"],
+                 13, "stall DSOV 0 held"),
+                ([">>> STALL DSOV0 HELD (card e): DSOV 0 while GFW is stalled; no sense, no next shot, no g/r/j; review it",
+                  "FIRSTSHOT: partial held for read-only inspection"], 13, "stall DSOV 0 held"),
+                (["HOST GUARD: the nvidia module is loaded: stop", "RESULT: HOST GUARD: the nvidia module is loaded: stop "
+                  "(runner rc 3)", "FIRSTSHOT: stop for review (bootrun rc 3)"], 2, "boot_failure"),
+                (["  WARN: DIE ID MISMATCH: fuse rows [8] differ from /opt/vfi/plan/dump.json: not the card that dump "
+                  "came from", "DIE ID MISMATCH or unreadable: stop", "FIRSTSHOT: bootrun exit 5: stop for review"],
+                 2, "boot_failure")):
+            with self.subTest(why=why, line=lines[0][:40]):
+                got = self.h.judge("\n".join([hdr] + lines), rc, False, "firstshot")
+                self.assertTrue(got and got.startswith(why), got)
+        got = self.h.judge(">>> STALL DSOV0 HELD (card e): a goldilocks signature (DSOV 0, CRC 0x55, full mask) while "
+                           "GFW is stalled", 15, False, "bootrun")
+        self.assertIn("goldilocks signature", got)
+
     def test_controller_off_twice(self):
         # the first latch at 362 (3x80) forbids deeper 3x80 shots; the planner climbs to 388 and latches again
         self.model({"events": {"1": "controller_off", "2": "controller_off"}})

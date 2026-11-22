@@ -39,9 +39,11 @@ RE_BOOT_HDR = re.compile(r"^######## first-shot boot \d+/\d+:")
 RE_LOST = re.compile(r"^(step \d+ .*: lost|TIPPED at step .*: (\d+ )?lost)", re.M)
 RULES = [
     ("goldilocks", re.compile(r"HOLD SEEN|>>> GOLDILOCKS HELD|HOLD LINE BUT RUNNER RC")),
+    ("stall_hold", re.compile(r">>> STALL DSOV0 HELD")),
     ("no_dip", re.compile(r"NO DIP")),
-    ("boot_failure", re.compile(r"IDENTITY MISMATCH|PREFLIGHT FAILED|PLAN SHA MISMATCH|PLAN SHA FAILED|NOT A FRESH BOOT|"
-                                r"never came up|did not go down|POWER STILL ON|RUNNER TRANSFER FAILED")),
+    ("boot_failure", re.compile(r"IDENTITY MISMATCH|DIE ID MISMATCH|HOST GUARD|PREFLIGHT FAILED|PLAN SHA MISMATCH|"
+                                r"PLAN SHA FAILED|NOT A FRESH BOOT|never came up|did not go down|POWER STILL ON|"
+                                r"RUNNER TRANSFER FAILED")),
     ("traceback", re.compile(r"Traceback|AssertionError")),
     ("controller_off", re.compile(r"CONTROLLER OFF|controller unreadable after the shot")),
     ("park_fail", re.compile(r"PARK FAILED|park: rc [1-9]|park after lost shot FAILED")),
@@ -167,6 +169,12 @@ class Hunt:
                 self.log("hold", msg="GOLDILOCKS held: %s" %
                          "; ".join(x for x in seg if "HOLD" in x or "ON_HOLD" in x))
                 return "goldilocks held (review the held state and the ON_HOLD output, if any)"
+            if "stall_hold" in hit:
+                # a DSOV 0 frame held during a GFW stall (a goldilocks signature included): the next boot would
+                # power-cycle it away, so stop and leave the card as it is for review
+                line = next(x for x in seg if dict(RULES)["stall_hold"].search(x)).strip()
+                self.log("hold", msg="STALL DSOV0 held: %s" % line)
+                return "stall DSOV 0 held, leave the card as it is for review: %s" % line
             for name in ("no_dip", "boot_failure", "traceback"):
                 if name in hit:
                     return "%s: %s" % (name, next(x for x in seg if RULES[[r[0] for r in RULES].index(name)][1].search(x)))

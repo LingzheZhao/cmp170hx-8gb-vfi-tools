@@ -3,7 +3,7 @@
 Single mode (REPEAT 1 and no reps field above 1) stops at the first shot that is not "under": poison is sticky until
 a power cycle on some cards. Cell mode parks after a lost shot (or, with LOST_NOPARK=1, sends one 100 ms PEX_RST
 pulse) and counts outcomes per step. A goldilocks is held, not parked. The controller is checked after every shot.
-Never below FLOOR mV.
+Never below FLOOR mV or above 825 mV.
 
 Usage (root, on the glitch boot, card parked, with the patched ga100vfi package importable):
   VFI_BDF=0000:05:00.0 python3 -I bisect_shots.py '<tag>' '<SEQ json>'
@@ -73,7 +73,8 @@ Environment:
 Poison (0xBADF/0xBAD0, hidden poison; a FUSECTRL poison only without POISON_RESET=1) and a controller latch
 (STATUS_WORD OFF bit, READ_VOUT below 500 mV) always
 end the boot: power cycle before the next shot.
-Exit codes: 0 sequence done or goldilocks held, 2 usage, firmware, unlock readback or a step the firmware refused,
+Exit codes: 0 sequence done or goldilocks held, 2 usage, a step out of range, firmware, unlock readback or a step the
+firmware refused,
 7 park failed before a step, 9 controller off or unsafe baseline (power cycle), 10 tipped, 11 nack or failed writes
 (the shot's state is unknown), 12 no dip (the controller dropped the shot), 13 partial held, 14 mistimed,
 15 DSOV 0 during a GFW stall held (a goldilocks signature in a stall included)."""
@@ -302,14 +303,18 @@ def poison_reset(card):
 fired = [0]; parked_before = [False]; last_stall = [False]
 if os.environ.get("RETRAIN", "0") != "0" or os.environ.get("SBR", "0") != "0":
     print("STOP: RETRAIN and SBR are not allowed during a campaign (no setpci retrain, no secondary bus reset)"); sys.exit(2)
-for s_ in SEQ:   # every step checked before the first shot, not when it comes up
-    v, td, np_, pw, vr, fs, hold, tr, rev, dly, gp, tv = step_fields(s_)
-    assert 0 <= tv <= 20000, s_
-    assert 0 <= dly <= 900 and 36 <= gp <= 2000, s_
-    assert 575 <= vr <= 825 and v >= FLOOR, s_
+V_MAX = 825   # no dip above the highest restore the runner allows: the firmware has no voltage limit of its own
+def step_ok(f):
+    v, td, np_, pw, vr, fs, hold, tr, rev, dly, gp, tv = f
     # revert 1 (hand-back) would leave E1 = 0xC2EA, which the NO DIP check below reads as a shot that did not run
-    assert 0 <= fs <= 7 and 0 <= hold <= 20 and rev in (0, 2) and (tr == -20 or -20000 <= tr <= -1000), s_
-assert GFW_WAIT >= 0 and STALLRUN >= 1, "GFW_WAIT and STALLRUN"
+    return (FLOOR <= v <= V_MAX and 575 <= vr <= 825 and 0 <= tv <= 20000 and 0 <= dly <= 900 and 36 <= gp <= 2000
+            and 0 <= fs <= 7 and 0 <= hold <= 20 and rev in (0, 2) and (tr == -20 or -20000 <= tr <= -1000))
+for s_ in SEQ:   # every step checked before the first shot, not when it comes up (explicit checks: python -O drops asserts)
+    if not step_ok(step_fields(s_)):
+        print("STOP: step out of range (v %d..%d mV, restore 575..825, fast 0..7, hold 0..20, revert 0 or 2, t_restore -20 "
+              "or -20000..-1000, delay 0..900, gap 36..2000, tv 0..20000): %s" % (FLOOR, V_MAX, s_)); sys.exit(2)
+if GFW_WAIT < 0 or STALLRUN < 1:
+    print("STOP: GFW_WAIT must be >= 0 and STALLRUN >= 1"); sys.exit(2)
 if STALL_THROUGH:
     print("WARNING: SHOOT_THROUGH_STALLS=1: shots fire while GFW is still booting. This breaks rule 2 of upstream "
           "pico-ga100vfi (never g, r/j or FLR while GFW boot status is 0x01) and can wedge the GFW boot sequencer; a "
@@ -360,8 +365,8 @@ if True:
             parked_before[0] = True
         f = step_fields(step)
         v, td, np_, pw, vr, fs, hold, tr, rev, dly, gp, tv = f
-        assert 575 <= vr <= 825
-        assert v >= FLOOR
+        if not step_ok(f):
+            print("STOP: step %d out of range: %s" % (i, step)); tr_dump(); sys.exit(2)
         a = Attempt(v_dip_mv=v, t_dip_us=td, v_restore_mv=vr, t_restore_us=tr, t_revert_us=tv, fast=fs, hold_ms=hold,
                     pulses=np_, pw=pw, gap=gp, delay=dly, revert=rev)
         n_this = fired[0]; ap = parked_before[0]; parked_before[0] = False

@@ -328,8 +328,8 @@ class RunnerTest(unittest.TestCase):
         self.assertIn(" tv=171 kind=", out)
         self.assertIn(" tv=0 kind=", out)
         rc, out, ev = run([STD, [450, -60, 3, 198, 750, 1, 1, 0, -20, 0, 117, 150, 20001]], "uu")
-        self.assertNotEqual(rc, 0, out)
-        self.assertIn("AssertionError", out)
+        self.assertEqual(rc, 2, out)
+        self.assertIn("STOP: step out of range", out)
         self.assertFalse(shots(ev))
 
     def test_push3_marker_accepted(self):
@@ -352,11 +352,13 @@ class RunnerTest(unittest.TestCase):
 
     def test_every_step_validated_before_the_first_shot(self):
         for bad_step in ([300, -60], [450, -60, 3, 198, 900], [450, -60, 3, 198, 750, 8], [450, -60, 3, 198, 750, 1, 1, 21],
-                         [450, -60, 3, 198, 750, 1, 1, 0, -500], [450, -60, 3, 198, 750, 1, 1, 0, -20, 1]):
+                         [450, -60, 3, 198, 750, 1, 1, 0, -500], [450, -60, 3, 198, 750, 1, 1, 0, -20, 1],
+                         [3810, -60], [826, -60, 3, 198, 750]):   # no upper limit in the firmware: a typo is refused here
             with self.subTest(step=bad_step):
                 rc, out, ev = run([STD, bad_step], "uu")
-                self.assertNotEqual(rc, 0, out)
-                self.assertIn("AssertionError", out)
+                self.assertEqual(rc, 2, out)                            # exit 2 (usage), not an AssertionError (1)
+                self.assertIn("STOP: step out of range", out)
+                self.assertNotIn("Traceback", out)
                 self.assertFalse([x for x in ev if x.startswith(("SHOT", "OPEN"))])
 
 
@@ -372,8 +374,8 @@ class RunnerTest(unittest.TestCase):
                          [450, -60, 3, 198, 750, 1, 1, 0, -20, 0, 117, 35], [450, -60, 3, 198, 750, 1, 1, 0, -20, 0, 117, 2001]):
             with self.subTest(step=bad_step):
                 rc, out, ev = run([STD, bad_step], "uu")
-                self.assertNotEqual(rc, 0, out)
-                self.assertIn("AssertionError", out)
+                self.assertEqual(rc, 2, out)
+                self.assertIn("STOP: step out of range", out)
                 self.assertFalse([x for x in ev if x.startswith(("SHOT", "OPEN"))])
 
     def test_bad0_followup_is_log_only(self):

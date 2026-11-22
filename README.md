@@ -7,8 +7,10 @@ With this glitch setup, and a separate burn step that is not part of this reposi
 8 GB cards in November 2026. Compute went from 70 SMs to 122, 122, 120, 118 and 108 on the first five (126, 126, 124,
 122 and 112 with the RECONFIG override), and on 2026-11-21 to 106 on card E (ceiling 110) and 120 on card C (ceiling
 124). All seven have the 80 GB memory layout and PCIe fuses that advertise 2.5 to 16 GT/s, read back after a cold
-boot; cards E and C were then checked under a driver (81920 MiB, 110 and 124 SMs with the override). The cards fell
-to four routes:
+boot; cards E and C were then checked under a driver (81920 MiB, 110 and 124 SMs with the override). On 2026-11-21
+every one of them also got one more record, PCIE_BOOT_GEN23_DISABLE, so they now come up advertising 16 GT/s at a cold
+boot; on cards that were already burned, the shot that hit was a single slow dip, two or three shots per card (see
+[CiMP](#cimp-the-whole-bench-behind-one-command)). The cards fell to four routes:
 
 - **Card G:** the community pulse train.
 - **Card H:** where that train did not work, by mapping where the glitch lands in the GPU's boot and then slowing the
@@ -23,8 +25,8 @@ to four routes:
   (`POISON_RESET`, [`docs/RUNNER.md`](docs/RUNNER.md)) made each poison cost seconds instead of a power cycle.
 
 [`tools/hunter/goldilocks_hunt.py`](tools/hunter/goldilocks_hunt.py) plans, runs and reads back the strategy for a
-person or an LLM agent, and [`cimp`](docs/CIMP.md) puts the configuration, a live status panel and the hunter behind
-one command. One-step dither (`revert` 2) is in the firmware too, but it did not finish a card: see
+person or an LLM agent, and [CiMP](#cimp-the-whole-bench-behind-one-command) puts the configuration, a live status panel
+and the hunter behind one command. One-step dither (`revert` 2) is in the firmware too, but it did not finish a card: see
 [What moves the window](#what-moves-the-window). The method, wiring, parts and results are on cmp.wiki:
 
 - [Voltage-glitch unlock: lab method on a Pico 2 W](https://cmp.wiki/wiki/Voltage-glitch_unlock:_lab_method_on_a_Pico_2_W)
@@ -35,6 +37,84 @@ one command. One-step dither (`revert` 2) is in the firmware too, but it did not
 > record can brick a card, and no burn tool, burn planner or per-card plan is included here. A glitch by itself
 > changes nothing permanent: a power cycle returns an unburned card to stock. You probe a powered card's board with
 > needles and pull its reset line; a slipped probe can damage the card or the host. Use at your own risk.
+
+## CiMP: the whole bench behind one command
+
+(Yes, the name is on purpose.)
+
+CiMP (`./cimp`, or `python3 tools/cimp/cimp.py`) is the front door to everything in this repository. You describe
+your bench once, and it drives the launcher, the runner and the hunter for you, shows you what the bench is doing in
+plain words, and tells you when to touch the fan. It is standard library Python, and nothing in it senses, arms or
+burns fuses: it glitches and reads, and it stops and hands over to you when a goldilocks is held.
+
+| Command | What it is for |
+|---|---|
+| `./cimp config` | Set up a bench once, interactively: the bench host, ssh (key or password, jump host), power control (Wake-on-LAN, IPMI, or "press the button" with `POWER=manual`), the Pico port, the log directory, the temperature gate, and your cards. Profiles keep several benches apart (`--profile`). It writes `bench.conf` and the ssh settings for you. |
+| `./cimp config --test` | Read-only checks of all of that (ping, ssh, the Pico port, the bench's Python, no `nvidia` module): exit 1 if anything is wrong. Run it before every session. |
+| `./cimp hunt ...` | The goldilocks hunter with your profile's settings: plan a phase, dry-run it, then run it for real with `--execute`. It stops on any hold, poison, latch or outcome it does not know. |
+| `./cimp watch` | A live panel in a second terminal: the phase in plain words (POWER CYCLE, BOOTING, PREFLIGHT, TEMP GATE, SHOOTING, HOLD with a bell), the temperature and which way it is going, a fan cue (fan UP, fan DOWN, leave it), and the last eight shots as words. `--log` gives one line per change. |
+| `./cimp ladder`, `./cimp classify` | What each frame means; name every shot in a log. |
+
+Every boot it runs goes through the same checks before a shot is fired: a fresh-boot guard, the plan files' checksums
+on both machines, a preflight (firmware marker, who owns the rail, the card's VRM profile, no driver), the card's
+identity (GPC and SM masks) **and, since 2026-11-22, its die ID**: fuse rows 8 to 15 must match the dump your plan was
+made from. Two of the lab's cards reported identical masks, and only the die ID told them apart. Then a two-sided
+temperature gate, and the first shot of every boot is never scored.
+
+### Quick start
+
+```sh
+git clone https://github.com/darkmaniac7/cmp170hx-8gb-vfi-tools && cd cmp170hx-8gb-vfi-tools
+# 1. Firmware: apply firmware/*.patch to pico-ga100vfi, build and flash push3 (firmware/README.md, docs/PUSH3.md).
+# 2. Bench host: a venv with the patched ga100vfi host package, and a glitch boot with no nvidia driver (Setup below).
+./cimp config                         # answer the questions; add your card at the end
+./cimp config --test                  # every check green before you go on
+./cimp hunt strategy                  # the search order and the stop rules, worth reading once
+./cimp hunt train --out plan.json     # plan the first phase (the community pulse train)
+./cimp hunt run plan.json             # dry run: every boot and shot it would fire
+./cimp hunt run plan.json --execute   # power-cycle and shoot; stops on a hold
+./cimp watch                          # in a second terminal, the whole time
+./cimp hunt tally hunt-logs/<run>     # what happened, per cell, and which phase to plan next
+```
+
+A card is a few values from `tools/vfi_snap.py` on a cold boot: `./cimp config --set card.b.tag="card B"
+--set card.b.gpc=0x00000023 --set "card.b.smc=SM now=70 ceiling=110"`. If you will burn from a plan, also give
+`plan_local`, `plan_remote` and `plan_files`, and set `die_dump` to the 512-row dump among them: then a different card
+in the slot stops the run at preflight.
+
+### Which phase first
+
+- **A stock card (70 SMs):** start with the community train (`hunt train`) and cap it at one or two hundred shots;
+  in the lab's logs it produced one stock hit in 5,335 train shots. Then follow `docs/SWEET_SPOT.md` (`readmap`,
+  `init`, `slow`); for a card that goes from under straight to link loss, the push3 overlap edge (`hunt overlap`,
+  `docs/OVERLAP_EDGE.md`).
+- **An already-burned card that needs one more record** (the lab's GEN23 pass): the single slow dip. It hit four
+  burned cards in two or three shots each, at a real NVVDD trough of 309 to 322 mV:
+
+  ```sh
+  ./cimp hunt slow --v 381,375,368,362,356 --s1-from -55 --s1-to -55 --reps 3 \
+        --continue-sent0 --poison-reset --out g23.json
+  ```
+
+  `--continue-sent0` matters: on two cards a sentinel-0 frame came one step before the hit, and by default it ends
+  the boot. Do not reuse the recipe from a card's first unlock: on one burned card the community train it had hit
+  with before gave 500 shots of "under" or a lost link and never a single DSOV 0 frame.
+
+### What the lab learned that applies to every card
+
+- **Never score the first shot of a boot.** It starts from the idle rail and lands 26 to 40 mV shallower; none of
+  the lab's 12 goldilocks frames was a first shot. The runner already skips it.
+- **Aim by the real trough, not the command.** The regulator undershoots by 39 to 60 mV depending on the card (steady
+  within a card). With an NVVDD probe and `--trace`, two shallow shots tell you the offset.
+- **On a burned card a lost link needs a cold power cycle.** A reset, a rail dip or a PCI rescan does not bring it
+  back. The launcher power-cycles for you; budget the time.
+- **Temperature is a gate, not a knob.** Within a recipe it made no measurable difference to losses. Keep it in a
+  band and let the depth do the work.
+- **Identify cards by die ID.** See above.
+
+`docs/CIMP.md` has every command, setting, profile, environment variable and the watch panel in detail;
+`docs/AUTONOMOUS_AGENT.md` covers letting an LLM agent drive it (`cimp config --yes`, `--json`, `watch --log`), with
+the stop rules that keep every burn decision with people.
 
 ## What is here
 
@@ -264,6 +344,9 @@ privilege mask stuck at `0xFFFFFEFE`; a sense on one of them poisoned the contro
   command to FUSECTRL, behind an allowlist, never DEBUGCTRL, and restores FUSEADDR. Fuse dumps and the upstream
   campaign's goldilocks log identify the card: keep them private. `tools/diag/enswtest.py` writes EN_SW_OVERRIDE on
   purpose (that is what it tests) and says so.
+- **Right card, by die ID.** With `DIE_DUMP` set for a card, the launcher reads fuse rows 8 to 15 (the die ID;
+  READ command only, FUSEADDR restored) after the identity check and stops (exit 5) when they differ from that plan
+  dump; it prints row numbers, never the values. `vfi_snap.py --die-id DUMP` is the same check by hand.
 - **The firmware's `u` command** writes the voltage controller's unlock and config-id, as upstream documents. The
   tools use it to take the rail under PMBus control for park and rescue; nothing else is written to the controller
   except through the firmware's own glitch command.
@@ -289,7 +372,10 @@ privilege mask stuck at `0xFFFFFEFE`; a sense on one of them poisoned the contro
   alarm, the goldilocks on the 13th), applied to this series; it builds with no warnings and passes the host
   simulation (90 of 90). The lab's image was built from its own push2 tree, so checksums differ (as for `0006-0010`).
 - `firmware/0012` (2026-11-22) makes `Bar0.wr32` one aligned 32-bit store: `struct.pack_into` wrote `0x00000000`
-  to the register before the value. Host only; with all twelve applied, this repo's tests pass (146, 1 skipped).
+  to the register before the value. Host only; with all twelve applied, this repo's tests pass.
+- The die ID check (`DIE_DUMP`, `vfi_snap.py --die-id`), `vfi_snap.py` exiting 1 on an untrusted row read, and the
+  hunter, runner and `cimp` fixes of 2026-11-22 pass the offline tests (149 with the twelve patches). The die ID check
+  follows the lab's bench check of the same day; neither had run on a card in this form when published (2026-11-22).
 - `cimp` and the runner and launcher additions of 2026-11-21 (the `tv` step field, `SENT0_CONTINUE`, per-poll gate
   lines and `TSTART`, `POWER=manual`) are new: `cimp watch` was checked against the lab's real logs, including card
   E's winning run, and everything passes the offline tests; the configurator, `hunt run` and the launcher additions

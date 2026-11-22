@@ -120,6 +120,7 @@ Cards (one set per card label; `tag`, `gpc` and `smc` are required, the rest opt
 | `card.<label>.plan_local` | optional dir of reviewed burn-plan files on the controller |
 | `card.<label>.plan_remote` | optional bench dir whose copies must match them by sha256 |
 | `card.<label>.plan_files` | optional plan file names, space separated |
+| `card.<label>.die_dump` | the 512-row dump among `plan_files` the plan was made from: its fuse rows 8-15 (the die ID) must match the card at preflight, or the run stops (exit 5) |
 
 ### ssh, keys and passwords
 

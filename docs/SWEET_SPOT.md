@@ -209,6 +209,9 @@ leave the others to you:
 | `POISON_RESET=1` | off (`--poison-reset`) | after a FUSECTRL poison: wait for GFW to be ready, one 100 ms `PEX_RST` pulse, then a healthy locked read or the boot ends |
 | poison (without `POISON_RESET`), latch | always | end the boot: power cycle |
 
+`run` drops `SHOOT_THROUGH_STALLS`, `PARTIAL_CONTINUE`, `SENT0_CONTINUE`, `POISON_RESET`, `CLASSIFY_WRITE` and
+`RUNNER` inherited from the shell unless the plan sets them: the plan alone turns these on.
+
 **Shoot-through breaks a rule.** Upstream pico-ga100vfi's AGENTS.md, rule 2: never `g`, `r`/`j` or FLR while GFW
 boot status is `0x01`; it can wedge the GFW boot sequencer. Both cards' maps were taken with shoot-through on, and a
 clean host power cycle recovered the card every time on the lab's bench. Without it every stall ends its boot, which

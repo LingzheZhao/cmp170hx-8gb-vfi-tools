@@ -359,10 +359,13 @@ privilege mask stuck at `0xFFFFFEFE`; a sense on one of them poisoned the contro
   come back while held, the rail stays held and config space is not read again; if the GPU asks for the floor
   after the handback, the rail is taken back. Every tool that glitches parks at the start, between cells and on
   exit (also on Ctrl-C or a safety stop), except when it holds a goldilocks.
-- **Poison-safe reads.** FUSECTRL is read first after every shot and in the snapshot; on `0xBADFxxxx` nothing else
-  is read, and the same holds for a `0xBADF` DSOV (patch 0005). The runner and `passive_snapshot.py` (patch 0010)
-  also stop at any `0xBAD0xxxx` read and at a FUSECTRL other than the idle `0xE0040000`. A poisoned controller stays
-  poisoned until a power cycle, so a poisoned shot ends the run.
+- **Poison-safe reads.** FUSECTRL is read first after every shot and in the snapshot; on `0xBADFxxxx` or
+  `0xBAD0xxxx` nothing else is read, and the same holds for a `0xBADF` DSOV (patch 0005). The runner and
+  `passive_snapshot.py` (patch 0010) also stop at any `0xBAD0xxxx` read and at a FUSECTRL other than the idle
+  `0xE0040000`. A poisoned controller stays poisoned until a power cycle, so a poisoned shot ends the run: the
+  runner's boot ends, and `vfi_hunt.py`, `vfi_edge.py` and `vfi_trace.py` stop and park the card.
+- **Rail check before config reads.** With `--port` (or `VFI_PORT`), `vfi_snap.py` reads the rail over I2C first and
+  does not touch config space when READ_VOUT is below 500 mV, whoever owns the rail.
 - **Stalls.** A GFW that is still booting after a shot gets one read-only stall read (FUSECTRL first) and, by
   default, ends the boot without another `g`, `r`/`j` or FLR, as upstream's rule 2 asks. `SHOOT_THROUGH_STALLS=1`
   breaks that rule on purpose and is off unless you turn it on.

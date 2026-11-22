@@ -63,7 +63,7 @@ automatically the first time you run `watch` or `hunt` on a terminal with no con
 
 Settings are read in this order, highest first: command-line flags (`watch --log-dir`), `CIMP_<KEY>` environment
 variables (`CIMP_LOG_DIR`, `CIMP_BENCH_HOST`, `CIMP_TMIN_C`, ...), the profile, the defaults. `CIMP_PROFILE` picks the
-profile, `CIMP_CONFIG` the config file.
+profile, `CIMP_CONFIG` the config file (a regular file: cimp refuses to save onto anything else).
 
 The config is `~/.config/cimp/config.json` (`$XDG_CONFIG_HOME` is honoured), written with mode 0600 in a 0700
 directory. The generated files go to `~/.config/cimp/profiles/<name>/` with the same modes. None of it belongs in a
@@ -121,7 +121,7 @@ Cards (one set per card label; `tag`, `gpc` and `smc` are required, the rest opt
 | `card.<label>.plan_local` | optional dir of reviewed burn-plan files on the controller |
 | `card.<label>.plan_remote` | optional bench dir whose copies must match them by sha256 |
 | `card.<label>.plan_files` | optional plan file names, space separated |
-| `card.<label>.die_dump` | the 512-row dump among `plan_files` the plan was made from: its fuse rows 8-15 (the die ID) must match the card at preflight, or the run stops (exit 5) |
+| `card.<label>.die_dump` | the 512-row dump among `plan_files` the plan was made from (a dump with `ff_rows`, or the file `vfi_snap.py --rows` writes, refused when its two passes differed): its fuse rows 8-15 (the die ID) must match the card at preflight, or the run stops (exit 5) |
 
 ### ssh, keys and passwords
 
@@ -156,7 +156,9 @@ never meet the driver).
 `cimp hunt <anything>` is `tools/hunter/goldilocks_hunt.py <anything>`. For `run` it also generates the profile's
 files, puts the ssh shims first on `PATH`, sets `BENCH_CONF`, the gate (`TMIN`/`TSTART` from `tmin_c`/`tstart_c`, raw
 = °C x 10, unless already set), `TCAP`, the card (`--card` from `card` unless given) and a time-stamped log directory
-under `log_dir`, which is what `cimp watch` follows.
+under `log_dir`, which is what `cimp watch` follows. The hunter's `run` drops inherited `SHOOT_THROUGH_STALLS`,
+`PARTIAL_CONTINUE`, `SENT0_CONTINUE`, `POISON_RESET`, `CLASSIFY_WRITE` and `RUNNER` values unless the plan sets
+them, so a variable left in the shell from a hand run does not change the hunt.
 
 ## For agents
 

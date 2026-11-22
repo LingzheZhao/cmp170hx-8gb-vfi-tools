@@ -171,15 +171,17 @@ FLOOR=331 TMIN=360 TCAP=300 PARK_EACH=1 REPEAT=1 LOSTRUN=1 CELLLOST=1 BAD0_FOLLO
 1. **Power cycle** (`POWER=wol` or `ipmi`): clean shutdown, wait until the host is really off (ping, or the BMC's
    power status, with a hard power-off if a clean shutdown stalls), wait `OFFWAIT`, power on, wait for ssh. A host
    that does not go down stops the run: it needs a hand on the power button. `NOCYCLE=1` skips this.
-2. **Fresh-boot guard**: the host must have been up for less than `FRESH_MAX` seconds (default 900). The bench
+2. **Fresh-boot guard**: the host must have been up for less than `FRESH_MAX` seconds (default 900), and after a power
+   cycle its boot id must differ from the one read before the shutdown (`NOT A FRESH BOOT`, exit 6). The bench
    kernel's boot id goes into the log, so two runs can be told apart as two boots.
 3. **Plan checksum** (only when the card names `PLAN_FILES`): every file must hash on both sides, and the hash lines
    (with the file names) must match. A file missing on both sides is a failure, not a match (exit 4).
 4. **Copy** the runner, `park.py`, `preflight.py`, `vfi_snap.py` and `vfi_common.py` to `BENCH_DIR`
    (`RUNNER TRANSFER FAILED`, exit 8). `RUNNER=<file>` copies another runner.
-5. **Host guard**: optional kernel command line word (`GLITCH_CMDLINE`), no `nvidia` module, no kernel lockdown,
-   exactly one `10de:20c2` card (or `CARD_BDF`) bound to `pci-stub` or nothing, the Pico's port present, memory
-   decode on, GFW boot progress not `0x01`. `MASK_PCIEHP=1` masks pciehp interrupts on a hotplug-capable root port.
+5. **Host guard**: optional kernel command line word (`GLITCH_CMDLINE`), no `nvidia` or `nouveau` module, no kernel
+   lockdown, exactly one `10de:20c2` card (or `CARD_BDF`, whose vendor and device are checked in sysfs before any
+   config access) bound to `pci-stub` or nothing, the Pico's port present, memory decode on (only the decode bit is
+   set), GFW boot progress not `0x01`. `MASK_PCIEHP=1` masks pciehp interrupts on a hotplug-capable root port.
 6. **Preflight** (`preflight.py`) must print `PREFLIGHT OK`.
 7. **Identity**: `vfi_snap.py` must print the card's `GPC dis/def/st=<GPC>/` and `SMC` line from `bench.conf`. A
    different card stops the run.
@@ -213,7 +215,8 @@ tools/runner/campaign.sh example ladder.json 8
 the runner's defaults and `reps` is forced to 1. A tipped boot goes on to the next step (also when the park after a
 lost shot failed: the next step starts from a power cycle). `campaign.sh` runs boot after boot along a ladder file;
 when a boot tips at step N, the next boot starts at step N+1; use it only for a ladder whose shots do not depend on
-their position in the boot, or with `PARK_EACH=1`. Both stop on a held goldilocks or partial, on any stop line
+their position in the boot, or with `PARK_EACH=1`; the ladder file's path may be relative to where you start it.
+Both stop on a held goldilocks or partial, on any stop line
 (controller off, no dip, mistimed, preflight, identity, checksum, temperature, transfer, park failure in `campaign.sh`,
 a Python error) and on any `bootrun.sh` exit other than 0 or 10. They print a summary per boot and keep every boot's
 full output in `LOGDIR` (default `logs/` next to the scripts).

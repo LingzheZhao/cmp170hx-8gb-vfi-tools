@@ -127,7 +127,7 @@ REGS = {  # outcome -> (FUSECTRL, DSOV, CRC, PLM)
     "under": (0x00040000, 1, 0x55, 0x0), "over": (0x00040000, 0, 0x00, 0xFFFFFEFE),
     "hit": (0x00040000, 0, 0x55, 0xFFFFFEFE), "goldilocks": (0x00040000, 0, 0x55, 0xFFFFFFFF),
     "poisoned": (0xBADF510E, 0, 0, 0), "stock": (0x00040000, 1, 0x55, 0x0),
-    "dsov_poisoned": (0x00040000, 0xBADF1701, 0, 0),
+    "dsov_poisoned": (0x00040000, 0xBADF1701, 0, 0), "bad0": (0xBAD00100, 0, 0, 0),
 }
 
 
@@ -147,7 +147,7 @@ class FakeBar:
     def rd32(self, off):
         ctrl, dsov, crc, plm = REGS[self.sim.state]
         self.reads.append(off)
-        if self.sim.state == "poisoned" and off != vc.FUSECTRL:
+        if self.sim.state in ("poisoned", "bad0") and off != vc.FUSECTRL:
             raise AssertionError(f"BAR0 read {off:#x} on a poisoned controller")
         if self.sim.state == "dsov_poisoned" and off not in (vc.FUSECTRL, 0x820084):
             raise AssertionError(f"BAR0 read {off:#x} after a 0xBADF DSOV")
@@ -264,6 +264,15 @@ class ParkTests(unittest.TestCase):
 class ShotTests(unittest.TestCase):
     def test_poisoned_reads_nothing_else(self):
         sim = Sim(lambda a: "poisoned")
+        with Rig(sim) as rig:
+            card = FakeCard(sim)
+            card.attempt(vc.make_attempt(331, -60, 750, -20, 3, 198, 150, 117, 1))
+            s = vc.read_outcome(BDF, 0.25)
+        self.assertEqual(s.outcome, "poisoned")
+        self.assertEqual(rig.bar.reads, [vc.FUSECTRL])
+
+    def test_bad0_fusectrl_reads_nothing_else(self):
+        sim = Sim(lambda a: "bad0")                    # the fuse unit did not answer: the runner stops here too
         with Rig(sim) as rig:
             card = FakeCard(sim)
             card.attempt(vc.make_attempt(331, -60, 750, -20, 3, 198, 150, 117, 1))
@@ -535,12 +544,13 @@ class SnapTests(unittest.TestCase):
                 self.assertEqual(vfi_snap.snapshot_rc(bad), 1)
 
     def test_poisoned_stops_before_other_reads(self):
-        with tempfile.TemporaryDirectory() as d:
-            rc, out = run_tool("vfi_snap", ["--bdf", BDF, "--resource", self._bar(d, 0xBADF510E),
-                                            "--outdir", os.path.join(d, "s")])
-            self.assertEqual(rc, 3, out)
-            self.assertIn("poisoned", out)
-            self.assertFalse(os.path.exists(os.path.join(d, "s")))
+        for ctrl in (0xBADF510E, 0xBAD00100):
+            with self.subTest(fusectrl=hex(ctrl)), tempfile.TemporaryDirectory() as d:
+                rc, out = run_tool("vfi_snap", ["--bdf", BDF, "--resource", self._bar(d, ctrl),
+                                                "--outdir", os.path.join(d, "s")])
+                self.assertEqual(rc, 3, out)
+                self.assertIn("poisoned", out)
+                self.assertFalse(os.path.exists(os.path.join(d, "s")))
 
 
 if __name__ == "__main__":

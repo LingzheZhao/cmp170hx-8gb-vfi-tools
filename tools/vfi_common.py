@@ -117,7 +117,8 @@ def boot_id() -> str:
 
 
 def is_poisoned(v: int) -> bool:
-    return (v & 0xFFFF0000) == 0xBADF0000
+    """0xBADFxxxx (poisoned) or 0xBAD0xxxx (the fuse unit did not answer): read nothing else, as the runner does."""
+    return (v >> 20) == 0xBAD
 
 
 # ---------------------------------------------------------------- Pico / VRM side

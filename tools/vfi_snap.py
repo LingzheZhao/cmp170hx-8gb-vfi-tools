@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Snapshot a CMP 170HX 8 GB card's fuse, gate and PCIe option registers to a private JSON file.
 
-Default mode: BAR0 READS ONLY, no register or config-space writes. FUSECTRL is read first; on 0xBADFxxxx the tool
-stops without reading anything else.
+Default mode: BAR0 READS ONLY, no register or config-space writes. FUSECTRL is read first; on 0xBADFxxxx or
+0xBAD0xxxx the tool stops without reading anything else.
 
 --rows also reads the 512 main fuse rows twice through the fuse controller's READ command. That writes only
 FUSEADDR (0x820004) and FUSECTRL = 1 (CMD_READ), then restores FUSEADDR. It never writes DEBUGCTRL (0x820060),

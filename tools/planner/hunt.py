@@ -29,6 +29,7 @@ import re
 import signal
 import subprocess
 import sys
+import threading
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -53,6 +54,7 @@ RULES = [
 ]
 KNOWN_STOP = re.compile(r"STOP: (power cycle needed|firmware refused step)")
 OK_RC = {0, 2, 10, 13, 14, 16}
+KILL_GRACE_S = 10   # after SIGTERM to a launcher past its deadline, then SIGKILL
 
 
 class Hunt:
@@ -113,21 +115,34 @@ class Hunt:
                                     stderr=subprocess.STDOUT, text=True, start_new_session=True)
             self.log("launch", msg="pid %d: %s (%d boot(s), %d shot(s))" % (proc.pid, lc["mode"], lc["boots"], lc["shots"]),
                      pid=proc.pid, argv=lc["argv"], env=lc["env"], steps=lc["steps"])
-            timed_out = False
+            fired = []
+
+            def kill():
+                # the deadline holds when the launcher prints nothing (ssh to a hung bench): SIGTERM to its own process
+                # group, by exact id, then SIGKILL after KILL_GRACE_S
+                fired.append(True)
+                for sig in (signal.SIGTERM, signal.SIGKILL):
+                    if proc.poll() is not None:
+                        return
+                    os.killpg(proc.pid, sig)
+                    try:
+                        proc.wait(timeout=KILL_GRACE_S)
+                        return
+                    except subprocess.TimeoutExpired:
+                        pass
+            timer = threading.Timer(timeout, kill)
+            timer.daemon = True
+            timer.start()
             try:
                 for line in proc.stdout:
                     out.write(line)
                     out.flush()
                     print("    | " + line.rstrip("\n"), flush=True)
-                    if time.time() - t > timeout:
-                        timed_out = True
-                        break
             finally:
-                if timed_out:
-                    os.killpg(proc.pid, signal.SIGTERM)   # our own process group, by exact id
+                timer.cancel()
                 rc = proc.wait()
                 proc.stdout.close()
-        return rc, timed_out, time.time() - t
+        return rc, bool(fired), time.time() - t
 
     def ingest(self, lc):
         recs, rep = parse.parse_file(lc["ingest"]["path"], self.card, firmware=None,

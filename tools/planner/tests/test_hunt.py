@@ -144,6 +144,34 @@ class TestHunt(HuntCase):
                            "GFW is stalled", 15, False, "bootrun")
         self.assertIn("goldilocks signature", got)
 
+    def test_a_silent_launcher_is_killed_at_the_deadline(self):
+        # a launcher that prints nothing (ssh to a hung bench) must still end at the per-boot timeout, also when it
+        # ignores SIGTERM
+        import threading
+        self.hunt(EDGE_FAM)
+        self.h.a.boot_timeout_min = 0.02                                  # 1.2 s
+        for script in ("exec sleep 8", "trap '' TERM; sleep 8; sleep 8"):
+            with self.subTest(script=script):
+                lc = {"out_path": os.path.join(self.d, "silent", "out.log"), "env": {}, "cwd": self.d, "mode": "firstshot",
+                      "argv": ["bash", "-c", script], "boots": 1, "shots": 1, "steps": []}
+                res = []
+                th = threading.Thread(target=lambda: res.append(self.h.run_launcher(lc)), daemon=True)
+                old = hunt.KILL_GRACE_S if hasattr(hunt, "KILL_GRACE_S") else None
+                hunt.KILL_GRACE_S = 0.5
+                try:
+                    th.start()
+                    th.join(6)
+                finally:
+                    if old is None:
+                        del hunt.KILL_GRACE_S
+                    else:
+                        hunt.KILL_GRACE_S = old
+                self.assertTrue(res, "run_launcher still blocked 6 s after a 1.2 s deadline")
+                rc, timed_out, dt = res[0]
+                self.assertTrue(timed_out)
+                self.assertNotEqual(rc, 0)
+                self.assertIn("(killed)", self.h.judge("", rc, timed_out, "firstshot"))
+
     def test_controller_off_twice(self):
         # the first latch at 362 (3x80) forbids deeper 3x80 shots; the planner climbs to 388 and latches again
         self.model({"events": {"1": "controller_off", "2": "controller_off"}})

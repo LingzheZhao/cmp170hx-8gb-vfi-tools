@@ -48,7 +48,7 @@ differently (see `firmware/README.md`), so checksums differ from the lab's image
 
 ```sh
 cd pico-ga100vfi && git checkout e1ebd97
-git am /path/to/cmp170hx-8gb-vfi-tools/firmware/*.patch      # 0001 to 0011
+git am /path/to/cmp170hx-8gb-vfi-tools/firmware/*.patch      # 0001 to 0012 (0012 is host-only: the image is push3)
 cmake -S firmware -B build -G Ninja -DPICO_BOARD=pico2_w -DBOARD_RP2350A=ON -DDEBUG=ON && cmake --build build
 picotool load -v -x build/pwmvid.uf2                         # the board must be in BOOTSEL
 ```

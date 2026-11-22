@@ -354,6 +354,19 @@ class BootrunTest(unittest.TestCase):
         self.assertIn("ON_HOLD rc=3", out)
         self.assertTrue(os.path.exists(log))
 
+    def test_a_stale_hold_in_the_reused_log_never_runs_the_hook(self):
+        # the default run log is reused per card; when tee cannot write it, an old hold line must not count
+        os.makedirs(os.path.join(self.tmp, "logs"))
+        with open(os.path.join(self.tmp, "logs", "bootrun-e.last"), "w") as f:
+            f.write(">>> GOLDILOCKS HELD (card e) v=369 td=-60\n")
+        tee = os.path.join(self.tmp, "bin", "tee")
+        with open(tee, "w") as f:
+            f.write("#!/bin/bash\ncat; exit 1\n")                     # passes the output on, writes no file
+        os.chmod(tee, 0o755)
+        rc, out, logs = self.run_bootrun(ON_HOLD="echo HOOK RAN")
+        self.assertNotIn("HOOK RAN", out)
+        self.assertNotIn("HOLD SEEN", out)
+
     def test_hold_without_a_hook_stops_and_reports(self):
         rc, out, logs = self.run_bootrun(FAKE_REMOTE_OUT=">>> GOLDILOCKS HELD (card e) v=350 td=-60")
         self.assertEqual(rc, 0, out)

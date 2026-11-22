@@ -377,7 +377,8 @@ privilege mask stuck at `0xFFFFFEFE`; a sense on one of them poisoned the contro
   start when one of the six profile registers holds its fast value (an interrupted shot: power the card fully off).
 - **Bounds.** The firmware has no voltage limits of its own. The tools accept dips of 280-400 mV, recovery of
   550-800 mV, 1-5 pulses of 36-400 µs and `t_dip` within ±1000 µs, and stop otherwise. The runner refuses dips below
-  `FLOOR` and recovery outside 575-825 mV.
+  `FLOOR` or above 825 mV and recovery outside 575-825 mV, and the hunter's step check refuses the same; a bad step
+  stops the runner before the first shot with a `STOP: step ...` line and exit 2.
 - **No driver, no lockdown.** The tools stop if the card is bound to anything but `pci-stub` (or nothing), if the
   `nvidia` module is loaded while the card is not held by `pci-stub`, or if kernel lockdown is on.
 - **Reads only.** The snapshot is BAR0 reads only by default. `--rows` writes nothing but FUSEADDR and the READ

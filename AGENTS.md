@@ -42,8 +42,13 @@ Go one step at a time, and say what each step is for. Confirm each before moving
    build, which `--trace` needs).
 3. **Bench host.** A venv with the patched `ga100vfi` host package, per "Setup" in `README.md`.
 4. **CiMP.** Either run `./cimp config` with the person answering, or ask them for the values and run
-   `./cimp config --yes --set KEY=VALUE ...` (`docs/CIMP.md` lists every key). Then `./cimp config --test` until it is
-   all green; explain any failure in plain words and what to do about it.
+   `./cimp config --yes --set KEY=VALUE ...` (`docs/CIMP.md` lists every key). Set `bench_py` to the full path of the
+   venv's python on the bench host (README's Setup makes `~/vfi-venv`; cimp's default is `/opt/vfi/venv/bin/python`).
+   The default temperature gate, `tmin_c` 39.5 to `tstart_c` 40.6 C, is close to the band card E's overlap runs used
+   (`docs/OVERLAP_EDGE.md`), not a rule: read the card's idle READ_TEMP1 (`tools/runner/preflight.py` on the bench
+   prints it raw; cimp's C is raw / 10) and set a band the person's room and fan can reach, or every boot waits
+   `tcap_s` and ends with exit 16. Then `./cimp config --test` until it is all green; explain any failure in plain
+   words and what to do about it.
 5. **The card.** On a cold boot, on the bench host, run `tools/vfi_snap.py --bdf <bdf>` with the venv's python (it needs
    `tools/vfi_common.py` next to it; `bootrun.sh` copies both to `BENCH_DIR` on every run, and a cold card needs
    `setpci -s <bdf> COMMAND=0x0002` first, as the tool tells you: that write turns memory decode on; it is not a

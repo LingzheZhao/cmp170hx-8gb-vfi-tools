@@ -463,7 +463,9 @@ def run_checks(profile, eff, cards):
     addr = eff["bench_addr"] or eff["bench_host"]
     if addr and shutil.which("ping"):
         rc = subprocess.run(["ping", "-c1", "-W2", addr], capture_output=True).returncode
-        res("bench answers ping", rc == 0, addr + ("" if rc == 0 else " (fine if the bench is off right now)"))
+        res("bench answers ping", True if rc == 0 else None,   # off, or ping filtered: ssh below is the real check
+            addr + ("" if rc == 0 else " (no answer: the bench is off or ping does not reach it; bootrun checks the "
+                                        "boot id across every power cycle)"))
     else:
         res("bench answers ping", None, "no address or no ping")
     if not eff["bench_host"]:

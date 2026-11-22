@@ -111,6 +111,14 @@ class Config(unittest.TestCase):
         rc, out = run(["config", "--test"], self.home, dict(env, CIMP_SSH_AUTH="key"))
         self.assertIn("BatchMode=yes", self.ssh_args())
 
+    def test_a_ping_miss_is_a_skip_and_ssh_decides(self):
+        env = dict(self.fake_bin(ping_rc=1), CIMP_BENCH_HOST="bench.example.lan", CIMP_WOL_MAC="aa:bb:cc:dd:ee:ff",
+                   CIMP_LOG_DIR=self.home)
+        rc, out = run(["config", "--test"], self.home, env)
+        self.assertIn("SKIP  bench answers ping", out)
+        self.assertIn("PASS  ssh to the bench", out)
+        self.assertEqual(rc, 0, out)                                    # ping filtered, ssh through: all green
+
     def test_a_missing_log_dir_is_a_skip(self):
         rc, out = run(["config", "--test"], self.home, dict(self.fake_bin(), CIMP_LOG_DIR=os.path.join(self.home, "nologs")))
         self.assertIn("SKIP  log dir readable", out)                   # the first run creates it

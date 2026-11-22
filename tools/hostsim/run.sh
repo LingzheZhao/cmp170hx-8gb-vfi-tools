@@ -2,8 +2,9 @@
 # Host simulation of glitch_cmd() in firmware/pwmvid.c: build it for two versions of a pico-ga100vfi tree and compare
 # them with check3.py (push2-legal shots identical, overlap shots run with the release at t = 0, setup refusal kept).
 # usage: tools/hostsim/run.sh /path/to/pico-ga100vfi [BASE_REF]
-#   the "new" side is the checked-out firmware/pwmvid.c; BASE_REF (default HEAD~1) is the push2 side, e.g. the commit
-#   before firmware/0011 was applied. Needs gcc and python3.
+#   the "new" side is the checked-out firmware/pwmvid.c; BASE_REF (default HEAD~1) is the push2 side, the commit
+#   before firmware/0011 was applied: HEAD~1 with 0001-0011 applied, HEAD~2 with all twelve (0012 is host-only).
+#   Needs gcc and python3.
 set -eu
 H=$(cd "$(dirname "$0")" && pwd); P=$(cd "$1" && pwd); BASE=${2:-HEAD~1}
 O=$(mktemp -d); trap 'rm -rf "$O"' EXIT

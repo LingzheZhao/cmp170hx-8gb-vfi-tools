@@ -12,7 +12,8 @@ stay.
 
 ```sh
 cd pico-ga100vfi && git checkout e1ebd97 && git am /path/to/cmp170hx-8gb-vfi-tools/firmware/*.patch
-/path/to/cmp170hx-8gb-vfi-tools/tools/hostsim/run.sh . HEAD~1      # HEAD = 0011 (push3), HEAD~1 = 0010 (push2)
+/path/to/cmp170hx-8gb-vfi-tools/tools/hostsim/run.sh . HEAD~2      # HEAD~2 = 0010 (push2); 0011 is push3, 0012 is host-only
 ```
 
-The last line is `0 failures` (90 checks).
+The last line is `0 failures` (90 checks). With all twelve patches, `HEAD~1` is 0011 (push3 against push3) and 13 checks
+fail: pass `HEAD~2`.

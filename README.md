@@ -439,7 +439,7 @@ GA100VFI_HOST=/path/to/pico-ga100vfi/host python3 -I tests/test_runner.py
 python3 -I tests/test_launchers.py
 python3 -I tests/test_hunter.py
 python3 -I tests/test_cimp.py
-tools/hostsim/run.sh /path/to/pico-ga100vfi HEAD~1        # with 0001-0011 applied: push2 against push3
+tools/hostsim/run.sh /path/to/pico-ga100vfi HEAD~2        # with 0001-0012 applied: push2 (0010) against push3
 (cd tools/planner/tests && python3 -I -m unittest discover -s . -t .)
 (cd /path/to/pico-ga100vfi/host && python3 -m unittest test_classify test_passive_snapshot test_serial_response)
 ```

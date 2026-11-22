@@ -482,6 +482,19 @@ class RunDriverTest(unittest.TestCase):
         self.assertTrue(os.path.exists(os.path.join(self.tmp, "logs", "boot-01.log")))
         self.assertTrue(os.path.exists(os.path.join(self.tmp, "logs", "boot-01.out")))
 
+    def test_poison_in_the_warmup_stops_by_default(self):
+        plan = self.plan("init", "--depths", "450,425", "--warmup", "[450,-60,3,198,750,1]")
+        tip = ("TIPPED at step 0 shot 0 (v=450 td=-60 pw=198 vr=750 f=1): poisoned FUSECTRL=0xbadf510e (no further BAR0 "
+               "reads). Power cycle (1 shots this boot)\nRESULT: TIPPED (runner rc 10)", 10)
+        rc, out, calls = self.drive(plan, [tip, DONE], "--execute")
+        self.assertEqual(rc, 3, out)
+        self.assertIn("poison in the warm-up step", out)
+        self.assertEqual(len(calls), 1)                                 # no second power cycle and boot
+        self.reset_fake()
+        rc, out, calls = self.drive(plan, [tip, DONE], "--execute", "--on-poison", "continue")
+        self.assertEqual(rc, 0, out)                                    # asked for: the same steps go to a new boot
+        self.assertEqual(len(calls), 2)
+
     def test_shots_per_boot_split_and_warmup_prefix(self):
         plan = self.plan("init", "--depths", "450,425", "--max-shots-per-boot", "30", "--warmup", "[450,-60,3,198,750,1]")
         rc, out, calls = self.drive(plan, [DONE] * 3, "--execute")

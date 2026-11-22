@@ -1302,6 +1302,9 @@ def cmd_run(a):
             continue
         if what in ("poison", "lost", "stall") and idx is not None:
             if idx < off:
+                if what == "poison" and a.on_poison == "stop":   # the default stop holds for the warm-up step too
+                    stop = "poison in the warm-up step (%s): the boot ended; tally the logs before going on" % text
+                    break
                 conts += 1
                 print("RUN: tipped in the warm-up step (%s); the same steps go to a new boot" % what)
                 if conts > a.max_cont:

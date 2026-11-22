@@ -1,5 +1,11 @@
 # Method notes from the push2 campaign (November 2026)
 
+> **This page is the record of the push2 nights, not the current method.** Card E was finished on 2026-11-21 with
+> the push3 overlap shot (`docs/OVERLAP_EDGE.md`). Section 7 ("Card E is unsolved", remove the PWM-VID link) and
+> the CRC table in section 6 (`0x77` as "closed"; the text below it corrects that: `0x77` is blocks 0 and 2 failed)
+> are kept as history. Start from `AGENTS.md` and `docs/SWEET_SPOT.md`; this repository does not use the PWM-VID
+> cold power-on path.
+
 What changed in how the lab searches for the glitch window, and why. Most of it comes from one night on one 8 GB card
 (card E on the [cmp.wiki results page](https://cmp.wiki/wiki/Voltage-glitch_unlock:_lab_results_and_fuse_findings)),
 about 500 shots with the push2 firmware (`firmware/0009`) and the push2 runner (`tools/runner/`). One card is a

@@ -214,9 +214,9 @@ git am /path/to/cmp170hx-8gb-vfi-tools/firmware/*.patch
 python3 -m venv ~/vfi-venv && ~/vfi-venv/bin/pip install ./host
 ```
 
-Flash the Pico before any lead touches PEX_RST. With all ten patches the firmware reports `fw=lab-psr1-push2`
-(`-debug` in the debug build). The debug build (`-DDEBUG=ON`) is needed only for NVVDD traces; it samples NVVDD on
-GP26 on RP2350A boards (GP42 on RP2350B).
+Flash the Pico before any lead touches PEX_RST. With all twelve patches the firmware reports `fw=lab-psr1-push3`
+(`-debug` in the debug build; patch 0012 changes only the host package). The debug build (`-DDEBUG=ON`) is needed only
+for NVVDD traces; it samples NVVDD on GP26 on RP2350A boards (GP42 on RP2350B).
 
 ## Use
 

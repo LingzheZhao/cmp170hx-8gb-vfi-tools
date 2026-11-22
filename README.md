@@ -118,8 +118,8 @@ Every step the agent does, you can type yourself:
 
 A card is a few values from `tools/vfi_snap.py` on a cold boot: `./cimp config --set card.b.tag="card B"
 --set card.b.gpc=0x00000023 --set "card.b.smc=SM now=70 ceiling=110"`. If you will burn from a plan, also give
-`plan_local`, `plan_remote` and `plan_files`, and set `die_dump` to the 512-row dump among them: then a different card
-in the slot stops the run at preflight.
+`plan_local`, `plan_remote` and `plan_files`, and set `die_dump` to the 512-row dump among them (a dump with `ff_rows`,
+or the file `vfi_snap.py --rows` writes): then a different card in the slot stops the run at preflight.
 
 ### Which phase first
 
@@ -390,7 +390,8 @@ privilege mask stuck at `0xFFFFFEFE`; a sense on one of them poisoned the contro
   purpose (that is what it tests) and says so.
 - **Right card, by die ID.** With `DIE_DUMP` set for a card, the launcher reads fuse rows 8 to 15 (the die ID;
   READ command only, FUSEADDR restored) after the identity check and stops (exit 5) when they differ from that plan
-  dump; it prints row numbers, never the values. `vfi_snap.py --die-id DUMP` is the same check by hand.
+  dump (one with `ff_rows`, or a `vfi_snap.py --rows` file; one whose two passes differed is refused); it prints row
+  numbers, never the values. `vfi_snap.py --die-id DUMP` is the same check by hand.
 - **The firmware's `u` command** writes the voltage controller's unlock and config-id, as upstream documents. The
   tools use it to take the rail under PMBus control for park and rescue; nothing else is written to the controller
   except through the firmware's own glitch command.

@@ -371,6 +371,24 @@ class HuntTests(unittest.TestCase):
         self.assertFalse(sim.crashed)
         self.assertEqual(sim.bad_cfg_reads, 0)
 
+    def test_poison_ends_the_run_and_parks(self):
+        n = {"i": 0}
+
+        def fn(a):
+            n["i"] += 1
+            return "poisoned" if n["i"] == 2 else "under"
+        for tool, extra in (("vfi_hunt", ["--budget", "20"]),
+                            ("vfi_edge", ["--v-dips", "356", "--t-dip-start", "-60", "--cell", "5"])):
+            with self.subTest(tool=tool):
+                n["i"] = 0
+                sim = Sim(fn)
+                with Rig(sim):
+                    rc, out = run_tool(tool, ARGS + extra)
+                self.assertEqual(rc, 3, out)
+                self.assertIn("poisoned the fuse controller", out)
+                self.assertEqual(len([e for e in sim.events if e[0] == "g"]), 2)   # no shot after the poison
+                self.assertEqual(sim.e1, vc.E1_GPU)                              # parked on the way out
+
     def test_boot_ledger_cap(self):
         sim = Sim(lambda a: "under")
         with Rig(sim):

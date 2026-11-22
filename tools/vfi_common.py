@@ -476,6 +476,10 @@ class Bench:
         self.ledger.check()
         s = fire(self.card, self.bdf, attempt, self.args.restore_wait, self.need_trace)
         self.ledger.add(s.outcome)
+        if s.outcome == "poisoned":   # stays poisoned until a power cycle: no further shot on this boot (parked on exit)
+            raise BenchStop(f"the shot poisoned the fuse controller (FUSECTRL {s.fusectrl or 0:#010x}): it stays "
+                            "poisoned until a power cycle; the card is parked; power-cycle the host before another "
+                            "shot")
         return s
 
     def hold(self, msg: str) -> None:

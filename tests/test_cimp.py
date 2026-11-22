@@ -289,6 +289,11 @@ class Hunt(unittest.TestCase):
                 rc, out = run(["hunt", "run", f] + selection, self.home)
                 self.assertEqual(rc, 0, out)
                 self.assertIn("card y, bootrun", out)
+        mine = os.path.join(self.home, "mine")
+        for opt in (["--log-dir", mine], ["--log-dir=" + mine]):
+            with self.subTest(opt=opt):
+                rc, out = run(["hunt", "run", f] + opt, self.home)
+                self.assertIn("logs %s (DRY RUN)" % mine, out)        # never overridden by the profile's run dir
 
 
 class Classify(unittest.TestCase):

@@ -1209,7 +1209,7 @@ def cmd_hunt(a, rest):
         if eff["card"]:
             # argparse uses the last occurrence, so an explicit card takes precedence.
             args[1:1] = ["--card", eff["card"]]
-        if "--log-dir" not in args and eff["runner_host"] == "local":
+        if not any(x == "--log-dir" or x.startswith("--log-dir=") for x in args) and eff["runner_host"] == "local":
             stamp = time.strftime("%Y%m%dT%H%M%S")
             args += ["--log-dir", os.path.join(abs_log_dir(eff), "run-%s" % stamp)]
         print("cimp: bench.conf %s, ssh via %s, gate %s..%s raw" % (gen["bench_conf"], gen["bin"], os.environ["TMIN"],

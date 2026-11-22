@@ -46,7 +46,8 @@ Go one step at a time, and say what each step is for. Confirm each before moving
    all green; explain any failure in plain words and what to do about it.
 5. **The card.** On a cold boot, on the bench host, run `tools/vfi_snap.py --bdf <bdf>` with the venv's python (it needs
    `tools/vfi_common.py` next to it; `bootrun.sh` copies both to `BENCH_DIR` on every run, and a cold card needs
-   `setpci -s <bdf> COMMAND=0x0002` first, as the tool tells you). It prints the GPC mask and the SM line. Register the card: `./cimp config --set card.<label>.tag="card X" --set card.<label>.gpc=0x... --set
+   `setpci -s <bdf> COMMAND=0x0002` first, as the tool tells you: that write turns memory decode on; it is not a
+   link retrain, which rule 4 still forbids). It prints the GPC mask and the SM line. Register the card: `./cimp config --set card.<label>.tag="card X" --set card.<label>.gpc=0x... --set
    "card.<label>.smc=SM now=.. ceiling=.."`. If they have a reviewed burn plan, also `plan_local`, `plan_remote`,
    `plan_files` and `die_dump` (the 512-row dump the plan was made from).
 6. **Where to start.** Run `./cimp hunt strategy` and read it. Then choose:

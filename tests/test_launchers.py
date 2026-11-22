@@ -417,6 +417,52 @@ class BootrunTest(unittest.TestCase):
         self.assertNotIn("bash -s --", logs["ssh.log"])                 # no shot, nothing ran on the bench
 
 
+class HostGuardTest(unittest.TestCase):
+    """The remote half's host guard, run on its own against a stand-in sysfs and fake lsmod/setpci/python3."""
+    def guard(self, vendor="0x10de", device="0x20c2", mods="", cmd="0000"):
+        src = open(os.path.join(RUNNER_DIR, "bootrun.sh")).read()
+        part = src[src.index("# host guard:"):src.index('echo "card $BDF gfw=$GFW pico=$PORT"')]
+        with tempfile.TemporaryDirectory() as d:
+            dev = os.path.join(d, "devices", "0000:05:00.0")
+            os.makedirs(dev)
+            for name, val in (("vendor", vendor), ("device", device)):
+                with open(os.path.join(dev, name), "w") as f:
+                    f.write(val + "\n")
+            part = part.replace("/sys/bus/pci/devices", os.path.join(d, "devices")).replace(
+                "/sys/kernel/security/lockdown", os.path.join(d, "no-lockdown"))
+            bins = os.path.join(d, "bin")
+            os.mkdir(bins)
+            for name, body in (("lsmod", "printf '%%b' '%s'" % mods), ("python3", "cat > /dev/null; echo 0xff"),
+                               ("setpci", 'echo "SETPCI $*" >> %s/log; [ $# -eq 3 ] && echo %s; exit 0' % (d, cmd))):
+                with open(os.path.join(bins, name), "w") as f:
+                    f.write("#!/bin/bash\n%s\n" % body)
+                os.chmod(os.path.join(bins, name), 0o755)
+            script = 'stop(){ echo "$1: stop"; exit "$2"; }\nBDF=0000:05:00.0; PORT=%s; CMDW=""\n%s\necho GUARD OK' % (dev, part)
+            p = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=30,
+                               env=dict(os.environ, PATH=bins + os.pathsep + os.environ["PATH"]))
+            log = open(os.path.join(d, "log")).read() if os.path.exists(os.path.join(d, "log")) else ""
+        return p.returncode, p.stdout + p.stderr, log
+
+    def test_a_configured_bdf_of_another_device_is_refused_before_any_config_write(self):
+        rc, out, log = self.guard(vendor="0x8086", device="0x1533")
+        self.assertEqual(rc, 3, out)
+        self.assertIn("HOST GUARD: 0000:05:00.0 is 0x8086:0x1533, not a 10de:20c2 card", out)
+        self.assertEqual(log, "")                                       # setpci never ran
+
+    def test_decode_on_sets_only_the_memory_bit(self):
+        rc, out, log = self.guard()
+        self.assertEqual(rc, 0, out)
+        self.assertIn("GUARD OK", out)
+        self.assertIn("SETPCI -s 0000:05:00.0 COMMAND=0x0002:0x0002", log)
+
+    def test_nouveau_is_refused_like_nvidia(self):
+        for mod in ("nvidia", "nouveau"):
+            with self.subTest(mod=mod):
+                rc, out, log = self.guard(mods="%s 1 0\\n" % mod)
+                self.assertEqual(rc, 3, out)
+                self.assertIn("HOST GUARD: the %s module is loaded" % mod, out)
+
+
 class GateTest(unittest.TestCase):
     """bootrun.sh's temperature gate, run on its own with a temperature that bounces one ADC step after passing."""
     def test_gate_uses_the_reading_that_passed(self):

@@ -85,6 +85,7 @@ cd /tmp || exit 3
 # host guard: the glitch boot, no NVIDIA driver, no lockdown, one card on pci-stub (or none), the Pico, decode on, GFW done
 [ -z "$CMDW" ] || grep -qw -- "$CMDW" /proc/cmdline || stop "HOST GUARD: '$CMDW' is not on the kernel command line (not the glitch boot)" 3
 lsmod | grep -q '^nvidia ' && stop "HOST GUARD: the nvidia module is loaded" 3
+lsmod | grep -q '^nouveau ' && stop "HOST GUARD: the nouveau module is loaded" 3
 [ ! -e /sys/kernel/security/lockdown ] || grep -q '\[none\]' /sys/kernel/security/lockdown || stop "HOST GUARD: kernel lockdown is on (Secure Boot?)" 3
 if [ -z "$BDF" ]; then
   mapfile -t B < <(lspci -Dn -d 10de:20c2 | awk '{print $1}')
@@ -92,10 +93,14 @@ if [ -z "$BDF" ]; then
   BDF=${B[0]}
 fi
 [ -e "/sys/bus/pci/devices/$BDF" ] || stop "HOST GUARD: no PCI device $BDF" 3
+# vendor and device from sysfs (cached by the kernel, no config access) before any config or BAR0 access: a stale bdf
+# must not reach another device
+ID="$(cat "/sys/bus/pci/devices/$BDF/vendor" 2>/dev/null):$(cat "/sys/bus/pci/devices/$BDF/device" 2>/dev/null)"
+[ "$ID" = 0x10de:0x20c2 ] || stop "HOST GUARD: $BDF is $ID, not a 10de:20c2 card" 3
 DRV=$(basename "$(readlink "/sys/bus/pci/devices/$BDF/driver" 2>/dev/null)" 2>/dev/null)
 [ -z "$DRV" ] || [ "$DRV" = pci-stub ] || stop "HOST GUARD: driver $DRV is bound to $BDF (only pci-stub is allowed)" 3
 [ -e "$PORT" ] || stop "HOST GUARD: no Pico serial port at $PORT" 3
-[ $(( 0x$(setpci -s "$BDF" COMMAND) & 2 )) -eq 0 ] && { setpci -s "$BDF" COMMAND=0x0002; echo "memory decode was off on $BDF: turned on"; }
+[ $(( 0x$(setpci -s "$BDF" COMMAND) & 2 )) -eq 0 ] && { setpci -s "$BDF" COMMAND=0x0002:0x0002; echo "memory decode was off on $BDF: turned on"; }
 GFW=$(python3 -I - "$BDF" <<'P'
 import mmap, os, sys
 p = f"/sys/bus/pci/devices/{sys.argv[1]}"

@@ -130,11 +130,12 @@ with that config. `cimp hunt run` puts the shims first on `PATH` and points `BEN
 `bench.conf`, so the launchers need no change.
 
 - **Key (recommended)** or **agent**: password logins are switched off for the bench alias.
-- **Password**: never written anywhere by CiMP, and `cimp config --set ssh_password=...` is refused. At run time
-  CiMP takes it from `CIMP_SSH_PASSWORD` or, if the optional `keyring` module is installed and you ran
-  `cimp config --store-password`, from the system keyring, and hands it to `sshpass` through `SSHPASS` in the
-  launcher's environment only. Without either, ssh asks on the terminal; since the bench reboots every boot, expect
-  one prompt per boot. Use a key for unattended runs.
+- **Password**: never written anywhere by CiMP, and `cimp config --set ssh_password=...` is refused. At run time CiMP
+  takes it from `CIMP_SSH_PASSWORD` or, if the optional `keyring` module is installed and you ran
+  `cimp config --store-password`, from the system keyring, and hands it to `sshpass` through `SSHPASS` in the launcher's environment
+  only. With `SSHPASS` set, the launchers and `config --test` do not pass ssh's `BatchMode=yes`, which turns password
+  logins off. Without either, ssh asks on the terminal; since the bench reboots every boot, expect one prompt per boot.
+  Use a key for unattended runs.
 - **Host keys**: `ssh_host_keys` is `strict` by default (the bench must be in `known_hosts`; run
   `ssh -F ~/.config/cimp/profiles/<name>/ssh_config cimp-bench true` once). `accept-new` trusts on first use.
 - The IPMI password stays in its own 0600 file (`ipmi_passfile`), as in `bench.conf`.

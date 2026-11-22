@@ -3,8 +3,9 @@
 `tools/runner/` holds the scripts the lab ran its glitch campaigns with, one boot at a time, cleaned of bench-specific
 names: the card's address, the serial port, the hosts and the power control are settings now. The logic is the
 lab's, except that the launcher's last step (handing a held goldilocks to a burn script) is replaced by an optional
-hook. Nothing here burns fuses. The current runner is the push2 runner: it needs push1, push2 or push3 firmware
-(`firmware/0001-0009`, marker `fw=lab-psr1-push1` or `fw=lab-psr1-push2`) and is meant for push2.
+hook. Nothing here burns fuses. The runner accepts push1, push2 or push3 firmware (markers `fw=lab-psr1-push1`,
+`-push2` and `-push3`). The firmware patch series builds push3 (`firmware/0011`; `0012` changes only the host
+package): use that.
 
 | File | Runs on | What |
 |---|---|---|
@@ -25,7 +26,7 @@ plans the phases of `docs/SWEET_SPOT.md`, drives `bootrun.sh` through them and t
 ## On the bench
 
 Prepare the host as in the main README (Secure Boot off, card on `pci-stub`, no NVIDIA driver, `pci=noaer`, memory
-decode on), flash push2 and install the patched host package in a venv:
+decode on), flash the patched firmware (push3) and install the patched host package in a venv:
 
 ```sh
 git clone https://github.com/dalzyu/pico-ga100vfi && cd pico-ga100vfi && git checkout e1ebd97

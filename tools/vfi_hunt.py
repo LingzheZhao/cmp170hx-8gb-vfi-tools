@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Stop-and-hold hunter: fire shots at one setting and stop on the first clean goldilocks, leaving it held.
 
-Clean goldilocks = all five checks of the tool's classifier pass: DSOV 0, CRC_STATUS 0x55, privilege mask
-0xffffffff, FPF row readable, DSOV write-back works. A held state keeps the rail under PMBus control at stock with
+Clean goldilocks = the checks of the tool's classifier pass: DSOV 0, CRC_STATUS 0x55, privilege mask 0xffffffff,
+FPF row readable. The DSOV write-back check runs only with CLASSIFY_WRITE=1 (opt-in since firmware/0005); by default
+the classifier only reads. A held state keeps the rail under PMBus control at stock with
 no reset and no handback, so it persists for read-only checks (vfi_snap.py). Run vfi_park.py when done.
 
 --stop-on hit also stops on DSOV 0 + CRC 0x55 with the privilege mask not fully open. Such states looked close on

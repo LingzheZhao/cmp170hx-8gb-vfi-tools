@@ -1227,6 +1227,11 @@ def classify_boot(out, rc):
     return "unknown", None, "bootrun exit %s" % rc
 
 
+# bootrun forwards these to the runner (RUNNER picks the file it copies and runs as root on the bench); they relax a
+# stop or change what runs, so only the plan may set them
+PLAN_ONLY_ENV = ("SHOOT_THROUGH_STALLS", "PARTIAL_CONTINUE", "SENT0_CONTINUE", "POISON_RESET", "CLASSIFY_WRITE", "RUNNER")
+
+
 def cmd_run(a):
     with open(a.plan) as f:
         plan = json.load(f)
@@ -1243,10 +1248,12 @@ def cmd_run(a):
                                                                   _dt.datetime.now().strftime("%Y%m%dT%H%M%S")))
     stop_file = a.stop_file or os.path.join(logdir, "STOP")
     env = dict(os.environ)
+    for k in PLAN_ONLY_ENV:   # never from a leftover shell value: the plan sets them, or bootrun's defaults apply
+        env.pop(k, None)
     env.update({k: str(v) for k, v in plan.get("env", {}).items()})
     env["NO_ON_HOLD"] = "1"
     env.pop("NOCYCLE", None)
-    if str(plan.get("env", {}).get("SHOOT_THROUGH_STALLS", 0)) == "1" and not a.owner_ok_shoot_through:
+    if str(env.get("SHOOT_THROUGH_STALLS", 0)) == "1" and not a.owner_ok_shoot_through:   # what bootrun will get
         print("RUN: this plan sets SHOOT_THROUGH_STALLS=1, which breaks upstream's rule 2 (no g, r/j or FLR while GFW "
               "is 0x01) and can wedge the GFW sequencer. Get the card owner's OK, then add --owner-ok-shoot-through.")
         return 2

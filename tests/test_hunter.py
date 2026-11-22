@@ -482,6 +482,25 @@ class RunDriverTest(unittest.TestCase):
         self.assertTrue(os.path.exists(os.path.join(self.tmp, "logs", "boot-01.log")))
         self.assertTrue(os.path.exists(os.path.join(self.tmp, "logs", "boot-01.out")))
 
+    def test_shell_values_never_relax_the_plan(self):
+        with open(self.bootrun, "w") as f:                              # log what bootrun would forward
+            f.write(FAKE_BOOTRUN.replace('"${REPEAT:-unset} ${FLOOR:-unset} ${LOST_NOPARK:-unset}"',
+                                         '"${SHOOT_THROUGH_STALLS:-unset} ${POISON_RESET:-unset} ${RUNNER:-unset}"'))
+        plan = self.plan("init", "--depths", "450")
+        p = json.load(open(plan))
+        del p["env"]["SHOOT_THROUGH_STALLS"]                            # a hand-edited or older plan
+        json.dump(p, open(plan, "w"))
+        leak = {"SHOOT_THROUGH_STALLS": "1", "POISON_RESET": "1", "RUNNER": "/tmp/not-the-runner.py"}
+        rc, out, calls = self.drive(plan, [DONE], "--execute", env=leak)
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(calls[0][4], "unset unset unset")
+        p["env"]["SHOOT_THROUGH_STALLS"] = 1                            # set by the plan: needs the owner's OK
+        json.dump(p, open(plan, "w"))
+        self.reset_fake()
+        rc, out, calls = self.drive(plan, [DONE], "--execute", env=leak)
+        self.assertEqual(rc, 2, out)
+        self.assertEqual(calls, [])
+
     def test_poison_in_the_warmup_stops_by_default(self):
         plan = self.plan("init", "--depths", "450,425", "--warmup", "[450,-60,3,198,750,1]")
         tip = ("TIPPED at step 0 shot 0 (v=450 td=-60 pw=198 vr=750 f=1): poisoned FUSECTRL=0xbadf510e (no further BAR0 "

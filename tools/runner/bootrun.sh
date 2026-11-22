@@ -17,7 +17,7 @@
 #      SENT0_CONTINUE
 #      (SENTINEL_EXPECT comes from the card function)
 # Exit codes: 1 bench never came up, 2 usage or config, 3 host guard or preflight failed, 4 plan checksum failed or
-# mismatched, 5 identity mismatch, 6 not a fresh boot, 7 bench did not power off, 8 runner transfer failed,
+# mismatched, 5 identity or die ID mismatch, 6 not a fresh boot, 7 bench did not power off, 8 runner transfer failed,
 # 16 temperature gate (TMIN not reached within TCAP: no shot); otherwise the runner's own exit code (0 sequence done
 # or goldilocks held, 9 controller off, 10 tipped, 13 partial held, 14 mistimed, 15 DSOV 0 held during a GFW stall,
 # ...; see bisect_shots.py), 124 when
@@ -32,7 +32,7 @@ CONF=${BENCH_CONF:-$HERE/bench.conf}
 : "${BENCH_SSH:?set BENCH_SSH in $CONF}" "${BENCH_DIR:?set BENCH_DIR in $CONF}" "${BENCH_PY:?set BENCH_PY in $CONF}"
 [ $# -eq 2 ] || { echo "usage: $0 <card> '<SEQ json>'"; exit 2; }
 CARD=$1; SEQ=$2
-TAG=""; GPC=""; SMC=""; CARD_BDF=""; PLAN_LOCAL=""; PLAN_REMOTE=""; PLAN_FILES=""; SENTINEL_EXPECT=""
+TAG=""; GPC=""; SMC=""; CARD_BDF=""; PLAN_LOCAL=""; PLAN_REMOTE=""; PLAN_FILES=""; SENTINEL_EXPECT=""; DIE_DUMP=""
 declare -F "card_$CARD" >/dev/null || { echo "unknown card '$CARD': define card_$CARD in $CONF"; exit 2; }
 "card_$CARD"
 [ -n "$TAG" ] && [ -n "$GPC" ] && [ -n "$SMC" ] || { echo "card_$CARD must set TAG, GPC and SMC"; exit 2; }
@@ -46,6 +46,13 @@ fi
 # The boot id goes into the log, so two runs can be told apart as two boots.
 u=$(bench_uptime); bid=$(ssh -o ConnectTimeout=3 -o BatchMode=yes "$H" cat /proc/sys/kernel/random/boot_id 2>/dev/null)
 echo "bench up ${u:-?}s boot_id ${bid:-?}"; [ "${u:-99999}" -lt "${FRESH_MAX:-900}" ] || { echo "NOT A FRESH BOOT: stop"; exit 6; }
+DIE=""
+if [ -n "$DIE_DUMP" ]; then   # die ID: fuse rows 8-15 of the card must match this checksummed plan dump
+  case " $PLAN_FILES " in *" $DIE_DUMP "*) DIE="$PLAN_REMOTE/$DIE_DUMP" ;;
+    *) echo "card_$CARD: DIE_DUMP ($DIE_DUMP) must be one of PLAN_FILES, so it is checksummed: stop"; exit 2 ;; esac
+elif [ -n "$PLAN_FILES" ]; then
+  echo "WARNING: card_$CARD names plan files but no DIE_DUMP: the die ID is not checked (two cards with the same GPC/SM/ceiling look identical)"
+fi
 if [ -n "$PLAN_FILES" ]; then
   # Hash lines include the file names; both sides must hash every plan file, and match line for line.
   nf=$(echo "$PLAN_FILES" | wc -w)
@@ -61,9 +68,9 @@ ssh "$H" "mkdir -p $(printf %q "$BENCH_DIR")" && scp -q "$RUNNER" "$H:$BENCH_DIR
   || { echo "RUNNER TRANSFER FAILED: stop"; exit 8; }
 L=${BOOTRUN_LOG:-${LOG_DIR:-.}/bootrun-$CARD.last}; mkdir -p "$(dirname "$L")"
 XENV="REPEAT=${REPEAT:-1} SHOTCAP=${SHOTCAP:-450} LOSTRUN=${LOSTRUN:-8} RESTORE_WAIT=${RESTORE_WAIT:-8.0} CELLLOST=${CELLLOST:-0} CLASSIFY_WRITE=${CLASSIFY_WRITE:-0} SENTINEL=${SENTINEL:-0x820410} BAD0_FOLLOWUP=${BAD0_FOLLOWUP:-0} GFW_WAIT=${GFW_WAIT:-5} LOST_NOPARK=${LOST_NOPARK:-0} PARTIAL_CONTINUE=${PARTIAL_CONTINUE:-0} SHOOT_THROUGH_STALLS=${SHOOT_THROUGH_STALLS:-0} STALLRUN=${STALLRUN:-8} SENT0_CONTINUE=${SENT0_CONTINUE:-0} POISON_RESET=${POISON_RESET:-0} SENTINEL_EXPECT=$SENTINEL_EXPECT"
-ssh "$H" "bash -s -- $(printf '%q ' "$TAG" "$SEQ" "$GPC" "$SMC" "$FLOOR" "$TMIN" "$TCAP" "$TRACE" "$PARK_EACH" "$XENV" "${RUNTO:-900}" "$BENCH_DIR" "$BENCH_PY" "${BENCH_TASKSET:-}" "$PORT" "$CARD_BDF" "${GLITCH_CMDLINE:-}" "${MASK_PCIEHP:-0}" "${TSTART:-99999}")" <<'R' | tee "$L"
+ssh "$H" "bash -s -- $(printf '%q ' "$TAG" "$SEQ" "$GPC" "$SMC" "$FLOOR" "$TMIN" "$TCAP" "$TRACE" "$PARK_EACH" "$XENV" "${RUNTO:-900}" "$BENCH_DIR" "$BENCH_PY" "${BENCH_TASKSET:-}" "$PORT" "$CARD_BDF" "${GLITCH_CMDLINE:-}" "${MASK_PCIEHP:-0}" "${TSTART:-99999}" "$DIE")" <<'R' | tee "$L"
 TAG=$1; SEQ=$2; GPC=$3; SMC=$4; FLOOR=$5; TMIN=$6; TCAP=$7; TRACE=$8; PARK_EACH=$9; XENV=${10}; RUNTO=${11}
-D=${12}; PY=${13}; TS=${14}; PORT=${15}; BDF=${16}; CMDW=${17}; MASK=${18}; TSTART=${19:-99999}
+D=${12}; PY=${13}; TS=${14}; PORT=${15}; BDF=${16}; CMDW=${17}; MASK=${18}; TSTART=${19:-99999}; DIE=${20:-}
 PYV="$TS $PY"
 stop(){ echo "$1: stop"; exit "$2"; }
 cd /tmp || exit 3
@@ -100,9 +107,13 @@ from ga100vfi.glitch import Card
 c = Card(sys.argv[1]); d = c.read(0x25, 0x8D, 2); print(d[0] | d[1] << 8); c.close()" "$PORT" 2>/dev/null; }
 timeout 60 $PYV -I "$D/preflight.py" "$PORT" > /tmp/vfi-pf.out 2>&1; grep -E "PREFLIGHT|pico v" /tmp/vfi-pf.out
 grep -q "PREFLIGHT OK" /tmp/vfi-pf.out || { echo "PREFLIGHT FAILED: stop"; tail -4 /tmp/vfi-pf.out; exit 3; }
-timeout 60 $PYV -E -s "$D/vfi_snap.py" --bdf "$BDF" --port "$PORT" --label preflight --outdir "$D/snaps" > /tmp/vfi-snap.out 2>&1
+timeout 60 $PYV -E -s "$D/vfi_snap.py" --bdf "$BDF" --port "$PORT" --label preflight --outdir "$D/snaps" ${DIE:+--die-id "$DIE"} > /tmp/vfi-snap.out 2>&1
 grep -E "verdict|GPC dis" /tmp/vfi-snap.out
 grep -q "GPC dis/def/st=$GPC/" /tmp/vfi-snap.out && grep -q "$SMC" /tmp/vfi-snap.out && echo "IDENTITY OK: $TAG" || { echo "IDENTITY MISMATCH: stop"; exit 5; }
+if [ -n "$DIE" ]; then
+  grep -q "die ID (fuse rows 8-15): match" /tmp/vfi-snap.out && echo "DIE ID OK: $TAG" \
+    || { grep -E "die ID|DIE ID" /tmp/vfi-snap.out; echo "DIE ID MISMATCH or unreadable: stop"; exit 5; }
+fi
 # one line per poll, so a watcher (tools/cimp/cimp.py watch) can show the card warming or cooling into the band
 t0=$(date +%s); while [ $(( $(date +%s) - t0 )) -lt "$TCAP" ]; do v=$(temp)
   echo "   gate temp_raw=${v:-unreadable} want [$TMIN, $TSTART] $(date +%H:%M:%S)"

@@ -50,4 +50,7 @@ card_example() {
   PLAN_LOCAL=                                # optional: a directory of reviewed files on this machine ...
   PLAN_REMOTE=                               # ... and the bench directory whose copies must match them by sha256
   PLAN_FILES=""                              # the file names, in both directories (empty = no checksum)
+  DIE_DUMP=                                  # strongly suggested with a plan: the 512-row dump among PLAN_FILES the plan
+                                             # was made from. Its fuse rows 8-15 (the die ID) must match the card before
+                                             # any shot: two cards with the same GPC/SM/ceiling are otherwise identical
 }

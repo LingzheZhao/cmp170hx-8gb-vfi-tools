@@ -481,6 +481,49 @@ class SnapTests(unittest.TestCase):
             self.assertEqual(len(files), 1)
             self.assertEqual(os.stat(os.path.join(d, "s", files[0])).st_mode & 0o777, 0o600)
 
+    def test_die_id_read_and_compare(self):
+        import json
+        import vfi_snap
+
+        class Fuse:                                       # a fuse controller whose CMD_READ completes at once
+            def __init__(self, rows):
+                self.rows, self.addr, self.data, self.ctrl, self.writes = rows, 77, 0, 0x00040000, []
+
+            def rd(self, off):
+                return {vfi_snap.CTRL: self.ctrl, vfi_snap.ADDR: self.addr, vfi_snap.DATA: self.data}[off]
+
+            def wr(self, off, val):
+                self.writes.append((off, val))
+                if off == vfi_snap.ADDR:
+                    self.addr = val
+                elif off == vfi_snap.CTRL and val == 1:
+                    self.data = self.rows.get(self.addr, 0)
+
+            def idle(self):
+                return ((self.ctrl >> 16) & 31) == 4 and (self.ctrl & 3) == 0
+
+        card = {8: 0xC0292E89, 9: 0xC0292E89, 12: 0x09001000, 13: 0x09001000}
+        f = Fuse(card)
+        got = vfi_snap.read_fuse_rows(f.rd, f.wr, f.idle, vfi_snap.DIE_ID_ROWS)
+        self.assertEqual(got, {r: card.get(r, 0) for r in range(8, 16)})
+        self.assertEqual(f.addr, 77)                                                   # FUSEADDR restored
+        self.assertTrue(all(off in (vfi_snap.ADDR, vfi_snap.CTRL) for off, _ in f.writes))
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "dump.json")
+            other = dict(card)
+            other.update({8: 0xC048EE89, 9: 0xC048EE89})                               # another card, same GPC/SM
+            with open(p, "w") as fh:
+                json.dump({"ff_rows": {str(i): "%#010x" % other.get(i, 0) for i in range(512)}}, fh)
+            want = vfi_snap.load_die_id(p)
+            self.assertEqual([r for r in vfi_snap.DIE_ID_ROWS if got[r] != want[r]], [8, 9])
+            with open(p, "w") as fh:
+                json.dump({"ff_rows": {"0": "0x0"}}, fh)                                # not a full dump
+            with self.assertRaises(vc.BenchStop):
+                vfi_snap.load_die_id(p)
+        self.assertEqual(vfi_snap.snapshot_rc({"die_id_match": False, "rows_match": True}), 5)
+        self.assertEqual(vfi_snap.snapshot_rc({"die_id_match": True}), 0)
+        self.assertEqual(vfi_snap.snapshot_rc({"die_id_error": "CMD_READ timeout at row 8"}), 1)
+
     def test_untrusted_row_read_is_a_failure(self):
         import vfi_snap
         self.assertEqual(vfi_snap.snapshot_rc({}), 0)                                   # no --rows

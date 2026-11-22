@@ -80,7 +80,9 @@ CARD_KEYS = (("tag", "label in the runner's log, e.g. card E"),
              ("sentinel_expect", "optional healthy value of the 0x820410 fuse alias on a fresh boot, e.g. 0x1"),
              ("plan_local", "optional dir of reviewed burn-plan files on the controller"),
              ("plan_remote", "optional bench dir whose copies must match them by sha256"),
-             ("plan_files", "optional plan file names, space separated"))
+             ("plan_files", "optional plan file names, space separated"),
+             ("die_dump", "the 512-row dump among plan_files the plan was made from: its fuse rows 8-15 (die ID) must "
+              "match the card before any shot"))
 DEFAULTS = {k: d for k, d, _, _ in SETTINGS}
 KIND = {k: t for k, _, t, _ in SETTINGS}
 HELP = {k: h for k, _, _, h in SETTINGS}

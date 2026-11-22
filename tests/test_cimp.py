@@ -109,13 +109,16 @@ class Config(unittest.TestCase):
     def test_generated_bench_conf_and_ssh_config(self):
         run(["config", "--yes", "--set", "bench_host=bench.example.lan", "--set", "bench_port=2222",
              "--set", "jump_host=gw@jump.example.lan", "--set", "power=manual", "--set", "card.x.tag=card X",
-             "--set", "card.x.gpc=0x00000023", "--set", "card.x.smc=SM now=70 ceiling=110"], self.home)
+             "--set", "card.x.gpc=0x00000023", "--set", "card.x.smc=SM now=70 ceiling=110",
+             "--set", "card.x.die_dump=dump.json"], self.home)
         bc = os.path.join(self.home, "bench.conf")
         rc, out = run(["config", "--write-bench-conf", bc], self.home)
         self.assertEqual(rc, 0, out)
         sh = subprocess.run(["bash", "-c", ". %s; card_x; echo \"$BENCH_SSH|$BENCH_ADDR|$POWER|$TAG|$GPC|$SMC\"" % bc],
                             capture_output=True, text=True)
         self.assertEqual(sh.stdout.strip(), "cimp-bench|bench.example.lan|manual|card X|0x00000023|SM now=70 ceiling=110")
+        sh = subprocess.run(["bash", "-c", ". %s; card_x; echo \"$DIE_DUMP\"" % bc], capture_output=True, text=True)
+        self.assertEqual(sh.stdout.strip(), "dump.json")
         pd = os.path.join(self.home, ".config", "cimp", "profiles", "default")
         sc = open(os.path.join(pd, "ssh_config")).read()
         for want in ("HostName bench.example.lan", "Port 2222", "ProxyJump gw@jump.example.lan", "StrictHostKeyChecking yes"):

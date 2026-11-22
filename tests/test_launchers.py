@@ -218,6 +218,14 @@ card_e() {
 card_x() {
   TAG="card x"; GPC=0x00000000; SMC="SM now=70 ceiling=0"
 }
+card_d() {
+  TAG="card d"; GPC=0x00000000; SMC="SM now=70 ceiling=0"
+  PLAN_LOCAL=$FAKE_DIR/plan-local; PLAN_REMOTE=$FAKE_DIR/plan-remote; PLAN_FILES="plan.json dump.json"; DIE_DUMP=dump.json
+}
+card_z() {
+  TAG="card z"; GPC=0x00000000; SMC="SM now=70 ceiling=0"
+  PLAN_LOCAL=$FAKE_DIR/plan-local; PLAN_REMOTE=$FAKE_DIR/plan-remote; PLAN_FILES="plan.json"; DIE_DUMP=dump.json
+}
 '''
 
 
@@ -299,6 +307,26 @@ class BootrunTest(unittest.TestCase):
         self.assertIn("TEMP GATE FAILED", logs["remote.sh"])
         self.assertIn("exit 16", logs["remote.sh"])
         self.assertIn("runner_rc=$rc", logs["remote.sh"])
+
+    def test_die_id_check(self):
+        rc, out, logs = self.run_bootrun(card="d")
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn("WARNING", out)
+        self.assertIn(os.path.join(self.tmp, "plan-remote", "dump.json"), logs["remote.args"])
+        self.assertIn('${DIE:+--die-id "$DIE"}', logs["remote.sh"])
+        self.assertIn("DIE ID MISMATCH or unreadable: stop", logs["remote.sh"])
+        for n in ("ssh.log", "remote.sh", "remote.args"):         # fresh fake logs for each sub-run
+            if os.path.exists(os.path.join(self.tmp, n)):
+                os.remove(os.path.join(self.tmp, n))
+        rc, out, logs = self.run_bootrun(card="z")                    # the dump must be one of the checksummed files
+        self.assertEqual(rc, 2, out)
+        self.assertIn("DIE_DUMP (dump.json) must be one of PLAN_FILES", out)
+        self.assertNotIn("SSH bash -s --", logs["ssh.log"])
+        rc, out, logs = self.run_bootrun(card="e")                    # plan files but no DIE_DUMP: runs, with a warning
+        self.assertEqual(rc, 0, out)
+        self.assertIn("WARNING: card_e names plan files but no DIE_DUMP", out)
+        rc, out, logs = self.run_bootrun(card="x")                    # no plan at all: no warning
+        self.assertNotIn("WARNING", out)
 
     def test_runner_status_is_propagated(self):
         rc, out, logs = self.run_bootrun(FAKE_REMOTE_OUT="TIPPED at step 0 (v=350): lost", FAKE_REMOTE_RC=10)

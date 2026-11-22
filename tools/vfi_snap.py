@@ -8,6 +8,10 @@ stops without reading anything else.
 FUSEADDR (0x820004) and FUSECTRL = 1 (CMD_READ), then restores FUSEADDR. It never writes DEBUGCTRL (0x820060),
 never selects RIR rows and never programs anything. Both passes must match.
 
+--die-id DUMP reads fuse rows 8-15 (the die ID) once with the same CMD_READ and compares them with the ff_rows of DUMP,
+the 512-row dump a burn plan was made from. Cards with the same GPC/SM/ceiling pass every other identity check; these
+rows tell them apart. Exit 5 when they differ. Only row numbers are printed, never the values.
+
 Run it on a healthy card (fresh boot, or right after vfi_park.py) or on a state held by vfi_hunt.py. With --port
 the rail is checked over I2C first and config space is not touched if the GPU is in brown-out.
 
@@ -44,12 +48,54 @@ ALIASES = [0x820148, 0x820E20, 0x8207F4, 0x820158, 0x820324, 0x820434, 0x821108,
            0x8206FC, 0x820644, 0x820640, 0x820410, 0x82063C, 0x820B98, 0x8205A8, 0x821064]
 TPC_DEFECTIVE = [0x8205C8, 0x820508, 0x82050C, 0x820514, 0x820564, 0x8205AC, 0x820B84, 0x820B80]
 TPC_RECONFIG = [0x820788, 0x82078C, 0x820790, 0x820794, 0x820798, 0x82079C, 0x820B94, 0x820B90]
+DIE_ID_ROWS = tuple(range(8, 16))   # fuse rows that carry the die ID
+
+
+def read_fuse_rows(rd, wr, idle, rows, timeout=0.2):
+    """One CMD_READ per row; FUSEADDR is restored afterwards. RuntimeError on a latch failure, a poison or a timeout."""
+    orig = rd(ADDR)
+    got = {}
+    try:
+        for row in rows:
+            wr(ADDR, row)
+            if rd(ADDR) != row:
+                raise RuntimeError(f"FUSEADDR did not latch row {row}")
+            wr(CTRL, 1)
+            t = time.monotonic() + timeout
+            while not idle():
+                c = rd(CTRL)
+                if vc.is_poisoned(c):
+                    raise RuntimeError(f"controller poisoned ({c:#010x}) at row {row}")
+                if time.monotonic() > t:
+                    raise RuntimeError(f"CMD_READ timeout at row {row}")
+            got[row] = rd(DATA)
+    finally:
+        if idle():
+            wr(ADDR, orig)
+    return got
+
+
+def load_die_id(path):
+    """The die ID rows (8-15) of a dump's ff_rows, as ints."""
+    with open(path) as f:
+        rows = json.load(f).get("ff_rows", {})
+    want = {}
+    for r in DIE_ID_ROWS:
+        v = rows.get(str(r))
+        if v is None:
+            raise vc.BenchStop(f"{path} does not hold fuse row {r}: use the full 512-row dump the plan was made from")
+        want[r] = int(v, 0) if isinstance(v, str) else int(v)
+    return want
 
 
 def snapshot_rc(out: dict) -> int:
-    """1 when a --rows read cannot be trusted: it failed, the two passes differ, or the gate/status registers changed
-    during the read. A plan must never be built from such a snapshot."""
-    bad = out.get("rows_error") or out.get("rows_match") is False or out.get("state_unchanged_by_row_read") is False
+    """5 when --die-id found a different card. 1 when a --rows or --die-id read cannot be trusted: it failed, the two
+    passes differ, or the gate/status registers changed during the read. A plan must never be built from such a
+    snapshot."""
+    if out.get("die_id_match") is False:
+        return 5
+    bad = (out.get("rows_error") or out.get("die_id_error") or out.get("rows_match") is False
+           or out.get("state_unchanged_by_row_read") is False)
     return 1 if bad else 0
 
 
@@ -59,6 +105,8 @@ def main() -> int:
                     help="PCI address of the card (or set VFI_BDF)")
     ap.add_argument("--port", default=None, help="Pico serial port: check the rail over I2C before any config read")
     ap.add_argument("--rows", action="store_true", help="also read the 512 main fuse rows twice (CMD_READ only)")
+    ap.add_argument("--die-id", metavar="DUMP", help="also read fuse rows 8-15 (the die ID, CMD_READ only) and compare "
+                    "them with DUMP's ff_rows; exit 5 when they differ (a different card)")
     ap.add_argument("--label", default="snap")
     ap.add_argument("--outdir", default="vfi-snaps")
     ap.add_argument("--allow-10gb", action="store_true", help="allow a 10 GB card (10de:2082), read-only use")
@@ -86,8 +134,9 @@ def main() -> int:
 
 
 def run(a, ident, cfg_cmd, resource) -> int:
-    fd = os.open(resource, (os.O_RDWR if a.rows else os.O_RDONLY) | os.O_SYNC)
-    mm = mmap.mmap(fd, 0x1000000, mmap.MAP_SHARED, mmap.PROT_READ | (mmap.PROT_WRITE if a.rows else 0))
+    rw = a.rows or a.die_id
+    fd = os.open(resource, (os.O_RDWR if rw else os.O_RDONLY) | os.O_SYNC)
+    mm = mmap.mmap(fd, 0x1000000, mmap.MAP_SHARED, mmap.PROT_READ | (mmap.PROT_WRITE if rw else 0))
     os.close(fd)
     mv32 = memoryview(mm).cast("I")
     try:
@@ -102,7 +151,7 @@ def snapshot(a, ident, cfg_cmd, mv32) -> int:
         return mv32[off // 4]
 
     def wr(off, val):
-        if not a.rows or off not in (ADDR, CTRL) or (off == CTRL and val != 1):
+        if not (a.rows or a.die_id) or off not in (ADDR, CTRL) or (off == CTRL and val != 1):
             raise RuntimeError(f"write outside the CMD_READ allowlist: {off:#x}={val:#x}")
         mv32[off // 4] = val
 
@@ -195,6 +244,22 @@ def snapshot(a, ident, cfg_cmd, mv32) -> int:
             if not out["rows_match"]:
                 warn.append("ROW READS DIFFER between passes")
 
+    if a.die_id:
+        want = load_die_id(a.die_id)
+        if any(w.startswith(("DEBUGCTRL", "fuse controller")) for w in warn):
+            raise vc.BenchStop("refusing the die ID read: " + "; ".join(warn))
+        try:
+            got = read_fuse_rows(rd, wr, idle, DIE_ID_ROWS)
+        except RuntimeError as e:
+            out["die_id_error"] = str(e)
+            warn.append("DIE ID READ FAILED: " + str(e))
+        else:
+            bad = [row for row in DIE_ID_ROWS if got[row] != want[row]]
+            out["die_id_match"] = not bad
+            out["die_id_rows_differing"] = bad
+            if bad:
+                warn.append(f"DIE ID MISMATCH: fuse rows {bad} differ from {a.die_id}: not the card that dump came from")
+
     fn = os.path.join(a.outdir, f"{datetime.datetime.now().strftime('%Y%m%dT%H%M%S')}-{a.label}.json")
     os.makedirs(a.outdir, mode=0o700, exist_ok=True)
     with os.fdopen(os.open(fn, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as f:
@@ -211,6 +276,9 @@ def snapshot(a, ident, cfg_cmd, mv32) -> int:
     if "rows_match" in out:
         print(f"  rows: 512 x2 match={out['rows_match']} nonzero={out['rows_nonzero']} "
               f"state_unchanged={out['state_unchanged_by_row_read']}")
+    if "die_id_match" in out:
+        print("  die ID (fuse rows 8-15): " + ("match" if out["die_id_match"]
+                                                 else f"MISMATCH rows {out['die_id_rows_differing']}"))
     for w in warn:
         print("  WARN: " + w)
     print("  saved " + fn + " (0600; keep it private)")

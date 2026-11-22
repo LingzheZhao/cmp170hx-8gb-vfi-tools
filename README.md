@@ -3,6 +3,11 @@
 Bench tools and firmware fixes for the Pico voltage-glitch ("goldilocks") method on NVIDIA CMP 170HX 8 GB cards
 (`10de:20c2`), built on [dalzyu/pico-ga100vfi](https://github.com/dalzyu/pico-ga100vfi).
 
+**How it is meant to be used:** an LLM coding agent with a shell on your controller machine runs the whole thing.
+It plans each phase, power-cycles the bench, shoots, reads the logs, picks the next phase and stops when a goldilocks
+is held, through one command, `cimp`. You do the physical work (cards, harness, probe, fan) and every burn decision.
+Every step also works by hand. Both ways are laid out under [CiMP](#cimp-the-whole-bench-behind-one-command).
+
 With this glitch setup, and a separate burn step that is not part of this repository, the lab finished seven
 8 GB cards in November 2026. Compute went from 70 SMs to 122, 122, 120, 118 and 108 on the first five (126, 126, 124,
 122 and 112 with the RECONFIG override), and on 2026-11-21 to 106 on card E (ceiling 110) and 120 on card C (ceiling
@@ -61,20 +66,50 @@ identity (GPC and SM masks) **and, since 2026-11-22, its die ID**: fuse rows 8 t
 made from. Two of the lab's cards reported identical masks, and only the die ID told them apart. Then a two-sided
 temperature gate, and the first shot of every boot is never scored.
 
-### Quick start
+### Before either way
 
 ```sh
 git clone https://github.com/darkmaniac7/cmp170hx-8gb-vfi-tools && cd cmp170hx-8gb-vfi-tools
 # 1. Firmware: apply firmware/*.patch to pico-ga100vfi, build and flash push3 (firmware/README.md, docs/PUSH3.md).
 # 2. Bench host: a venv with the patched ga100vfi host package, and a glitch boot with no nvidia driver (Setup below).
+# 3. This machine: ssh to the bench host with a key, and power control (Wake-on-LAN, IPMI, or you at the button).
 ./cimp config                         # answer the questions; add your card at the end
 ./cimp config --test                  # every check green before you go on
-./cimp hunt strategy                  # the search order and the stop rules, worth reading once
-./cimp hunt train --out plan.json     # plan the first phase (the community pulse train)
-./cimp hunt run plan.json             # dry run: every boot and shot it would fire
-./cimp hunt run plan.json --execute   # power-cycle and shoot; stops on a hold
-./cimp watch                          # in a second terminal, the whole time
-./cimp hunt tally hunt-logs/<run>     # what happened, per cell, and which phase to plan next
+```
+
+### With an agent (the way it is meant to run)
+
+Give the agent a shell on the machine with this checkout (it reaches the bench over ssh, as configured), then
+paste something like this and fill in the card:
+
+```text
+You are running a voltage-glitch campaign on a CMP 170HX 8 GB card with the tools in this repository.
+Read README.md, docs/AUTONOMOUS_AGENT.md and docs/SWEET_SPOT.md, then run `./cimp hunt strategy`.
+Card: <label> (already set up in cimp). Goal: hold a goldilocks frame on it, then stop and tell me.
+Loop: `./cimp config --test`; plan one phase with `./cimp hunt <phase> --out <file>`; dry-run it with
+`./cimp hunt run <file> --card <label>` and show me the first dry run before you execute anything; run it with
+`--execute`; follow it with `./cimp watch --log`; when it ends, `./cimp hunt tally <run dir>` and pick the next
+phase from the strategy.
+Stop and ask me on any hold, a poison or latch you cannot clear, an outcome you do not recognise, and anything
+physical (cards, probes, harness, fan). Never sense, arm or burn fuses yourself.
+Keep a journal of every run, and cite the run log for every claim.
+```
+
+From there it can run all night: many boots and thousands of shots, every one logged the same way. It will ask you
+for the fan when `cimp watch` says so, and it hands over when a goldilocks is held. What stays with people, and the
+guard rails, are in `docs/AUTONOMOUS_AGENT.md`. The burn step is not in this repository on purpose.
+
+### By hand
+
+Every step the agent does, you can type yourself:
+
+```sh
+./cimp hunt strategy                                 # the search order and the stop rules, worth reading once
+./cimp hunt train --out plan.json                    # plan the first phase (the community pulse train)
+./cimp hunt run plan.json --card <label>             # dry run: every boot and shot it would fire
+./cimp hunt run plan.json --card <label> --execute   # power-cycle and shoot; stops on a hold
+./cimp watch                                         # in a second terminal, the whole time
+./cimp hunt tally hunt-logs/<run>                    # what happened, per cell, and which phase to plan next
 ```
 
 A card is a few values from `tools/vfi_snap.py` on a cold boot: `./cimp config --set card.b.tag="card B"
@@ -113,8 +148,8 @@ in the slot stops the run at preflight.
 - **Identify cards by die ID.** See above.
 
 `docs/CIMP.md` has every command, setting, profile, environment variable and the watch panel in detail;
-`docs/AUTONOMOUS_AGENT.md` covers letting an LLM agent drive it (`cimp config --yes`, `--json`, `watch --log`), with
-the stop rules that keep every burn decision with people.
+`docs/AUTONOMOUS_AGENT.md` has the agent's side: what it controls, its loop, its stop rules and the guard rails
+(`cimp config --yes`, `--json` and `watch --log` are made for it).
 
 ## What is here
 

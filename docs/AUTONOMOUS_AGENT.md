@@ -126,13 +126,18 @@ settings can be compared on equal terms.
 - No secondary bus reset and no `setpci` link retrain during a campaign (`RETRAIN` and `SBR` are off by default).
 - FUSECTRL first after every shot; stop on `0xBADF` and `0xBAD0`.
 - Never run a fuse sense on a state whose privilege mask reads `0xFFFFFEFE`.
-- No NVVDD probe lead attached while glitching; verification shots only.
+- The NVVDD probe lead: the lab's earlier campaigns kept it off while glitching (a lead on the rail can change it),
+  and used it for verification shots only. The 2026-11-21 pass on already-burned cards glitched with it on
+  (`--trace`) and hit in two or three shots per card, aiming by the measured trough. Either way, clip it on with the
+  bench off, away from the I2C header: it knocked the harness loose more than once, and a loose harness reads as a
+  dead regulator ("I2C ERR -2", or "bus low").
 - Check that every shot really ran (`pwd=1`, `e1=0xc2fa`).
 - Burns only from a verified goldilocks state, and only with the owner's explicit approval.
 
 ## Suggestions for the agent's instructions
 
-Not from the wiki page; what this setup asks of whoever drives it:
+The README has a starter prompt under "With an agent". Not from the wiki page; what this setup asks of whoever
+drives it:
 
 - The settings file (`bench.conf`) and the card table, so the agent never types a host, address or card identity by
   hand.

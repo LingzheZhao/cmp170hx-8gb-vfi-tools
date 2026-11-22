@@ -289,5 +289,14 @@ class Classify(unittest.TestCase):
                 "cell 0 v=450 td=-60 np=3 pw=198 vr=750: {'under': 1, 'lost': 1, 'partial': 0, 'other': 0}\n")
         self.assertEqual(self.classify_text(text), ["lost link", "under (no effect)"])
 
+    def test_a_mistimed_frame_is_never_goldilocks(self):
+        text = ("   glitch vd=369 td=-60 vr=750 tr=-20 tv=0 fast=1 hold=0 pulses=3 pw=198 gap=150 delay=117 revert=0 dither=0\n"
+                "   observed, not scored: FUSECTRL=0xe0040000 GFW=0x000003ff DSOV=0x00000000 CRC=0x00000055 "
+                "PLM=0xffffffff SENTINEL=0x00000000 state=candidate reason=x\n"
+                "SHOT n=0 step=0 v=369 kind=mistimed | MISTIMED (release_at=9 us; observed GOLDILOCKS)\n"
+                "step 0 shot 0 v=369 td=-60 pw=198 vr=750 f=1: MISTIMED (release_at=9 us; observed GOLDILOCKS)\n")
+        self.assertEqual(self.classify_text(text), ["MISTIMED (not scored)"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

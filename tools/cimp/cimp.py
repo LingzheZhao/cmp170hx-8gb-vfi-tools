@@ -615,6 +615,8 @@ LADDER = [
 def classify(shot):
     st = shot.get("step", "") or ""
     kind = shot.get("kind")
+    if kind == "mistimed" or st.startswith("MISTIMED"):   # never scored, whatever frame it showed (the runner stops)
+        return "mistimed", "MISTIMED (not scored)"
     if "GOLDILOCKS" in (shot.get("hold") or "") or st.startswith("GOLDILOCKS") or kind == "goldilocks":
         return "GOLDILOCKS", "GOLDILOCKS (held for the active sense)"
     if shot.get("hold"):
@@ -1048,9 +1050,10 @@ PH_COLOR = {"SHOOTING": "32", "TEMP GATE": "33", "PREFLIGHT": "36", "BENCH BOOTI
             "TRIPPED": "31", "TOO HOT": "31", "GATE TIMEOUT": "31", "BOOT ENDED": "33", "HOLD": "35;1",
             "FINISHED": "1", "IDLE": "2", "STOPPED": "2"}
 KEY_COLOR = {"GOLDILOCKS": "35;1", "HOLD": "35;1", "light": "32", "lightPLM": "33", "CRC44": "36", "over": "33",
-             "dsov0": "36", "crcfault": "33", "lost": "31", "poison": "31", "under": "2", "booting": "2"}
+             "dsov0": "36", "crcfault": "33", "lost": "31", "poison": "31", "under": "2", "booting": "2",
+             "mistimed": "33"}
 ORDER = ["light", "lightPLM", "CRC44", "dsov0", "over", "crcfault", "under", "lost", "poison", "booting",
-         "partial", "other"]
+         "partial", "mistimed", "other"]
 NAMES = {"lightPLM": "light-PLM", "dsov0": "DSOV0-other", "crcfault": "CRC-fault"}
 
 

@@ -61,7 +61,8 @@ Go one step at a time, and say what each step is for. Confirm each before moving
 2. Plan one phase: `./cimp hunt <phase> ... --out <plan.json>`. Read the notes it prints.
 3. Dry run: `./cimp hunt run <plan.json> --card <label>`. The first time, show the person the summary and get a yes.
 4. Run it: the same with `--execute`, in a `tmux`/`screen` session or in the background, so it survives your turn.
-5. Follow it: `./cimp watch --log` (one line per change of phase, temperature, fan cue or shot).
+5. Follow it: `./cimp watch --log` (one line per change of phase, temperature, fan cue or shot). It runs until it
+   is interrupted: start it in the background or its own `tmux`/`screen` window, or poll with `./cimp watch --once`.
 6. When it ends: read the last line and the exit code of `./cimp hunt run` (first table below), then
    `./cimp hunt tally <run dir>`. Read its "Next" block and plan the next phase.
 7. Write a journal entry (below). Then go round again.

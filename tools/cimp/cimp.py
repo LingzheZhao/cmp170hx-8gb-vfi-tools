@@ -1211,7 +1211,9 @@ def cmd_ladder(a):
     print("The outcome ladder, light to heavy (docs/OVERLAP_EDGE.md, docs/SWEET_SPOT.md):")
     for k, v in LADDER:
         print("  %-11s %s" % (k, v))
-    print("Hold rule: only DSOV 0 + CRC 0x55 + PLM 0xffffffff is held. CRC 0x44 is not a write window.")
+    print("Hold rule: the runner holds a goldilocks (DSOV 0 + CRC 0x55 + PLM 0xffffffff) and, by default, every other\n"
+          "readable DSOV 0 frame (a partial, exit 13; CRC 0x44 included) and a DSOV 0 read in a GFW stall (exit 15). Leave\n"
+          "any hold as it is and report it; do not power-cycle it. Only a goldilocks is a write window: CRC 0x44 is not.")
     return 0
 
 

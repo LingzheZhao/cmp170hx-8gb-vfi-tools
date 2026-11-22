@@ -115,8 +115,16 @@ def load_file():
     return data
 
 
+def regular_target(p):
+    """A path cimp may replace: missing or a regular file. CIMP_CONFIG=/dev/null (read as an empty config) must never
+    be replaced by a file when run as root, nor a FIFO or a device."""
+    if os.path.lexists(p) and not os.path.isfile(p):
+        raise SystemExit("cimp: %s is not a regular file; not writing it (set CIMP_CONFIG to a file path)" % p)
+    return p
+
+
 def save_file(data):
-    p = config_path()
+    p = regular_target(config_path())
     old = os.umask(0o077)
     try:
         os.makedirs(os.path.dirname(p), mode=0o700, exist_ok=True)
@@ -565,7 +573,7 @@ def cmd_config(a):
     if a.write_bench_conf:
         gen = generate(prof_name, eff, cards)
         if a.write_bench_conf != "-":
-            shutil.copyfile(gen["bench_conf"], a.write_bench_conf)
+            shutil.copyfile(gen["bench_conf"], regular_target(a.write_bench_conf))
             os.chmod(a.write_bench_conf, 0o600)
             print("wrote %s (BENCH_SSH=cimp-bench needs the ssh shims in %s first on PATH, or `cimp hunt run`)"
                   % (a.write_bench_conf, gen["bin"]))

@@ -123,6 +123,17 @@ class Config(unittest.TestCase):
         rc, out = run(["config", "--test"], self.home, dict(self.fake_bin(), CIMP_LOG_DIR=os.path.join(self.home, "nologs")))
         self.assertIn("SKIP  log dir readable", out)                   # the first run creates it
 
+    def test_never_replaces_a_special_file(self):
+        fifo = os.path.join(self.home, "fifo")                          # stands in for /dev/null, a device, a FIFO
+        os.mkfifo(fifo)
+        rc, out = run(["config", "--yes", "--set", "bench_host=bench.example.lan"], self.home, {"CIMP_CONFIG": fifo})
+        self.assertNotEqual(rc, 0, out)
+        self.assertIn("not a regular file", out)
+        self.assertTrue(stat.S_ISFIFO(os.lstat(fifo).st_mode))
+        rc, out = run(["config", "--write-bench-conf", self.home], self.home)
+        self.assertNotEqual(rc, 0, out)
+        self.assertTrue(os.path.isdir(self.home))
+
     def test_refuses_secrets_and_bad_values(self):
         for kv, msg in (("ssh_password=hunter2", "never stores"), ("bench_port=70000", "1..65535"),
                         ("wol_mac=nope", "MAC"), ("power=maybe", "one of"), ("nosuchkey=1", "unknown setting")):

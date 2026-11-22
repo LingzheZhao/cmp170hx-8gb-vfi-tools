@@ -6,7 +6,7 @@ that configuration, and the outcome ladder. Standard library only. Nothing in it
 
 ```sh
 ./cimp config                 # set up this machine's bench profile (asked on first use if there is no config)
-./cimp config --test          # read-only checks: settings, log dir, ping, ssh, Pico port present, bench python, no nvidia
+./cimp config --test          # checks: settings, log dir, ping, ssh, Pico port present, bench python, no nvidia
 ./cimp watch                  # live panel; --log for one line per change, --once to print it once
 ./cimp hunt overlap --out plan-overlap.json          # any goldilocks_hunt.py command, with this profile's settings
 ./cimp hunt run plan-overlap.json                    # dry run; add --execute to power-cycle and shoot
@@ -52,7 +52,7 @@ automatically the first time you run `watch` or `hunt` on a terminal with no con
 |---|---|
 | `cimp config --show` | the effective settings and where each came from (default, profile, env, flag); secrets masked |
 | `cimp config --json` | the same as JSON, for agents |
-| `cimp config --test` | read-only checks (below); exit 1 if any fails |
+| `cimp config --test` | checks (below); rewrites the generated files; exit 1 if any fails |
 | `cimp config --set KEY=VALUE` | set a value without questions; repeatable; `card.<label>.<key>=...` for cards |
 | `cimp config --unset KEY` | back to the default |
 | `cimp config --yes` | no questions: save what `--set` gave, defaults for the rest (agents, CI) |
@@ -141,9 +141,11 @@ with that config. `cimp hunt run` puts the shims first on `PATH` and points `BEN
 
 ### config --test
 
-Read-only: the settings are complete, the generated files and the config file are private, the hunter and runner are
-present, the log directory is readable (here or on the runner host), the bench answers ping (fine to fail while it is
-off), ssh to the bench works with this profile, and on the bench: the Pico port exists (`test -e`, the port is not
+It first rewrites the profile's generated `ssh_config`, `ssh`/`scp` shims and `bench.conf`; the checks themselves
+are read-only: the settings are complete, the generated files and the config file are private, the hunter and runner
+are present, the log directory is readable (here or on the runner host; a missing local log directory is a SKIP, the
+first run creates it), the bench answers ping (a miss is a SKIP: the bench may be off), ssh to the bench works with
+this profile, and on the bench: the Pico port exists (`test -e`, the port is not
 opened), the bench python exists, the bench directory exists, and no NVIDIA driver is loaded (a glitched card must
 never meet the driver).
 

@@ -44,11 +44,13 @@ bid0=""
 if [ "${NOCYCLE:-0}" != 1 ]; then
   # boot id before the cycle (empty when the bench is off): power.sh's wol/manual paths take the first missed ping as
   # "off", so a host that never went down (ping filtered, ssh through a jump host) is caught here instead
-  bid0=$(ssh -o ConnectTimeout=3 -o BatchMode=yes "$H" cat /proc/sys/kernel/random/boot_id 2>/dev/null)
+  # shellcheck disable=SC2046
+  bid0=$(ssh -o ConnectTimeout=3 $(ssh_batch) "$H" cat /proc/sys/kernel/random/boot_id 2>/dev/null)
   power_cycle || exit $?
 fi
 # The boot id goes into the log, so two runs can be told apart as two boots.
-u=$(bench_uptime); bid=$(ssh -o ConnectTimeout=3 -o BatchMode=yes "$H" cat /proc/sys/kernel/random/boot_id 2>/dev/null)
+# shellcheck disable=SC2046
+u=$(bench_uptime); bid=$(ssh -o ConnectTimeout=3 $(ssh_batch) "$H" cat /proc/sys/kernel/random/boot_id 2>/dev/null)
 echo "bench up ${u:-?}s boot_id ${bid:-?}"; [ "${u:-99999}" -lt "${FRESH_MAX:-900}" ] || { echo "NOT A FRESH BOOT: stop"; exit 6; }
 [ -z "$bid0" ] || { [ -n "$bid" ] && [ "$bid" != "$bid0" ]; } \
   || { echo "NOT A FRESH BOOT: boot_id ${bid:-unreadable} after the power cycle, $bid0 before: stop"; exit 6; }

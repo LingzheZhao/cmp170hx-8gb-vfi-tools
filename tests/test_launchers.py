@@ -185,7 +185,7 @@ class CampaignTest(unittest.TestCase):
 
 FAKE_BIN = {
     "ssh": r'''#!/bin/bash
-while [ $# -gt 0 ]; do case "$1" in -o) shift 2;; -*) shift;; *) break;; esac; done
+while [ $# -gt 0 ]; do case "$1" in -o) [ "$2" = BatchMode=yes ] && echo BATCHMODE >> "$FAKE_DIR/ssh.log"; shift 2;; -*) shift;; *) break;; esac; done
 shift; cmd="$*"; printf 'SSH %.200s\n' "$cmd" >> "$FAKE_DIR/ssh.log"
 case "$cmd" in
   "bash -s --"*) cat > "$FAKE_DIR/remote.sh"; printf '%s' "$cmd" > "$FAKE_DIR/remote.args"
@@ -396,6 +396,17 @@ class BootrunTest(unittest.TestCase):
         self.assertIn("power on (Wake-on-LAN)", out)
         self.assertIn("WOL 02:00:00:00:00:01 255.255.255.255", logs["ssh.log"])
         self.assertIn("POWEROFF", logs["ssh.log"])
+
+    def test_no_batch_mode_when_a_password_comes_from_sshpass(self):
+        # BatchMode=yes disables password authentication, so sshpass (cimp ssh_auth = password) could never log in
+        rc, out, logs = self.run_bootrun(NOCYCLE="0")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("BATCHMODE", logs["ssh.log"])
+        open(os.path.join(self.tmp, "ssh.log"), "w").close()
+        rc, out, logs = self.run_bootrun(NOCYCLE="0", SSHPASS="x")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("SSH cut -d. -f1 /proc/uptime", logs["ssh.log"])
+        self.assertNotIn("BATCHMODE", logs["ssh.log"])
 
     def test_power_cycle_that_keeps_the_boot_id_is_not_fresh(self):
         # wol/manual take the first missed ping as "off": with ping filtered and a host that never went down, the

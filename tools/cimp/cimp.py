@@ -472,7 +472,7 @@ def run_checks(profile, eff, cards):
     pw = ssh_password(profile) if eff["ssh_auth"] == "password" else None
     if pw:
         env["SSHPASS"] = pw
-    batch = [] if eff["ssh_auth"] == "password" and not pw else ["-o", "BatchMode=yes"]
+    batch = [] if eff["ssh_auth"] == "password" else ["-o", "BatchMode=yes"]   # BatchMode turns password auth off
     probe = ("echo up; test -e %s && echo pico || echo nopico; test -x %s && echo py || echo nopy; "
              "test -d %s && echo dir || echo nodir; lsmod | grep -q '^nvidia ' && echo nvidia || echo nonvidia"
              % (shell_q(eff["pico_port"]), shell_q(eff["bench_py"]), shell_q(eff["bench_dir"])))

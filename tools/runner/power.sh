@@ -8,7 +8,12 @@
 
 bench_addr() { echo "${BENCH_ADDR:-${BENCH_SSH#*@}}"; }
 
-bench_uptime() { ssh -o ConnectTimeout=3 -o BatchMode=yes "$BENCH_SSH" "cut -d. -f1 /proc/uptime" 2>/dev/null; }
+# BatchMode keeps an unattended ssh from waiting at a prompt. It also turns password authentication off, so not when a
+# password comes from SSHPASS (cimp's ssh_auth = password: its ssh shim runs sshpass).
+ssh_batch() { [ -n "${SSHPASS:-}" ] || echo "-o BatchMode=yes"; }
+
+# shellcheck disable=SC2046
+bench_uptime() { ssh -o ConnectTimeout=3 $(ssh_batch) "$BENCH_SSH" "cut -d. -f1 /proc/uptime" 2>/dev/null; }
 
 ipmi() {
   [ -n "${IPMI_HOST:-}" ] && [ -n "${IPMI_USER:-}" ] && [ -n "${IPMI_PASSFILE:-}" ] || { echo "POWER=ipmi needs IPMI_HOST, IPMI_USER and IPMI_PASSFILE"; return 2; }

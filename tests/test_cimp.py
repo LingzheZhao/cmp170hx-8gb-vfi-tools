@@ -85,6 +85,32 @@ class Config(unittest.TestCase):
         self.assertEqual(prof["wol_mac"], "aa:bb:cc:dd:ee:ff")
         self.assertEqual(prof["cards"]["x"]["gpc"], "0x00000023")
 
+    def fake_bin(self, ping_rc=0):
+        """Fake ssh (records its arguments, answers the probe), sshpass and ping first on PATH: no network."""
+        d = os.path.join(self.home, "fakebin")
+        os.makedirs(d, exist_ok=True)
+        for name, body in (("ssh", 'echo "$@" >> "%s/ssh.args"; echo up pico py dir nonvidia' % self.home),
+                           ("sshpass", '[ "$1" = -e ] && shift; exec "$@"'), ("ping", "exit %d" % ping_rc)):
+            with open(os.path.join(d, name), "w") as f:
+                f.write("#!/bin/sh\n%s\n" % body)
+            os.chmod(os.path.join(d, name), 0o755)
+        return {"PATH": d + os.pathsep + os.environ["PATH"]}
+
+    def ssh_args(self):
+        with open(os.path.join(self.home, "ssh.args")) as f:
+            return f.read()
+
+    def test_password_auth_check_does_not_force_batch_mode(self):
+        # BatchMode=yes turns password authentication off: sshpass could never log in
+        env = dict(self.fake_bin(), CIMP_BENCH_HOST="bench.example.lan", CIMP_SSH_AUTH="password",
+                   CIMP_SSH_PASSWORD="x")
+        rc, out = run(["config", "--test"], self.home, env)
+        self.assertIn("PASS  ssh to the bench", out)
+        self.assertNotIn("BatchMode=yes", self.ssh_args())
+        os.remove(os.path.join(self.home, "ssh.args"))
+        rc, out = run(["config", "--test"], self.home, dict(env, CIMP_SSH_AUTH="key"))
+        self.assertIn("BatchMode=yes", self.ssh_args())
+
     def test_refuses_secrets_and_bad_values(self):
         for kv, msg in (("ssh_password=hunter2", "never stores"), ("bench_port=70000", "1..65535"),
                         ("wol_mac=nope", "MAC"), ("power=maybe", "one of"), ("nosuchkey=1", "unknown setting")):

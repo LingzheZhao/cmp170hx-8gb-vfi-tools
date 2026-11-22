@@ -111,6 +111,10 @@ class Config(unittest.TestCase):
         rc, out = run(["config", "--test"], self.home, dict(env, CIMP_SSH_AUTH="key"))
         self.assertIn("BatchMode=yes", self.ssh_args())
 
+    def test_a_missing_log_dir_is_a_skip(self):
+        rc, out = run(["config", "--test"], self.home, dict(self.fake_bin(), CIMP_LOG_DIR=os.path.join(self.home, "nologs")))
+        self.assertIn("SKIP  log dir readable", out)                   # the first run creates it
+
     def test_refuses_secrets_and_bad_values(self):
         for kv, msg in (("ssh_password=hunter2", "never stores"), ("bench_port=70000", "1..65535"),
                         ("wol_mac=nope", "MAC"), ("power=maybe", "one of"), ("nosuchkey=1", "unknown setting")):

@@ -454,7 +454,8 @@ def run_checks(profile, eff, cards):
         and os.path.exists(os.path.join(TOOLS, "runner", "bootrun.sh")), TOOLS)
     if eff["runner_host"] == "local":
         d = abs_log_dir(eff)
-        res("log dir readable", os.path.isdir(d) and os.access(d, os.R_OK), d if os.path.isdir(d) else d + " (missing: created on the first run)")
+        res("log dir readable", os.access(d, os.R_OK) if os.path.isdir(d) else None,
+            d if os.path.isdir(d) else d + " (missing: created on the first run)")
     else:
         rc = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", eff["runner_host"],
                              "test -r %s" % shell_q(eff["log_dir"])], capture_output=True).returncode

@@ -42,9 +42,11 @@ sudo -E /opt/vfi/venv/bin/python -I tools/runner/bisect_shots.py 'card X' \
   '[[450,-60,3,198,750,1,2],[381,-60,3,80,750,0,5],[375,-60,3,80,750,0,5]]'
 ```
 
-A step is `[v_mV, td_us, pulses, pw_us, v_restore_mV, fast, reps, hold_ms, t_restore_us, revert, delay_us, gap_us]`.
-Omitted tail fields default to 3 pulses, 198 µs, 750 mV, `fast` 1, `REPEAT` shots, hold 0, `t_restore` -20,
-`revert` 0, delay 117 µs and gap 150 µs, which is the stock command. `revert` is 0 or 2 (one-VID dither); 1 is
+A step is `[v_mV, td_us, pulses, pw_us, v_restore_mV, fast, reps, hold_ms, t_restore_us, revert, delay_us, gap_us,
+t_revert_us]`. Omitted tail fields default to 3 pulses, 198 µs, 750 mV, `fast` 1, `REPEAT` shots, hold 0,
+`t_restore` -20, `revert` 0, delay 117 µs, gap 150 µs and `t_revert_us` (tv) 0, which is the stock command. tv is
+when the firmware writes the stock 787.5 mV after the train (0 to 20000 µs); overlap scans pin it
+(`docs/OVERLAP_EDGE.md`). `revert` is 0 or 2 (one-VID dither); 1 is
 refused because the no-dip check needs the rail under PMBus control after the shot. `fast` 2..7, `hold_ms` > 0,
 `t_restore` <= -1000 and `revert` 2 are the knobs of `firmware/0008`. Every step is checked before the first shot
 (v >= `FLOOR`, v_restore 575 to 825, delay 0 to 900, gap 36 to 2000, the knob ranges). The firmware uses `td` and
@@ -143,11 +145,12 @@ before a step, 9 controller off or unsafe baseline, 10 tipped, 11 nack or failed
 
 Environment: `VFI_BDF` (required), `VFI_PORT`, `VFI_PARK`, `VFI_TRACE_DIR`, `FLOOR` (lowest dip, default 381 mV),
 `REPEAT`, `SHOTCAP`, `LOSTRUN`, `CELLLOST`, `RESTORE_WAIT`, `GFW_WAIT` (default 5 s), `SENTINEL` (0 turns it off),
-`SENTINEL_EXPECT`, `PARK_EACH=1`, `LOST_NOPARK=1`, `POISON_RESET=1`, `PARTIAL_CONTINUE=1`, `SHOOT_THROUGH_STALLS=1` with
-`STALLRUN`,
+`SENTINEL_EXPECT`, `PARK_EACH=1`, `LOST_NOPARK=1`, `POISON_RESET=1`, `PARTIAL_CONTINUE=1`, `SENT0_CONTINUE=1`,
+`SHOOT_THROUGH_STALLS=1` with `STALLRUN`,
 `TRACE=1` (NVVDD traces, debug firmware, NVVDD lead on), `BAD0_FOLLOWUP=1`. `RETRAIN` and `SBR`
 (link retrain, secondary bus reset) are refused. The runner never writes BAR0, so `CLASSIFY_WRITE` only matters to
-tools that call the patched `classify()`.
+tools that call the patched `classify()`. Three different `FLOOR` defaults: the runner alone 381 mV, `bootrun.sh`
+338 mV, and the hunter's `--floor` 338 mV (written into every plan). By hand, set `FLOOR` for the recipe.
 
 ## On the controller: `bootrun.sh`
 
@@ -175,13 +178,14 @@ FLOOR=331 TMIN=360 TCAP=300 PARK_EACH=1 REPEAT=1 LOSTRUN=1 CELLLOST=1 BAD0_FOLLO
 6. **Preflight** (`preflight.py`) must print `PREFLIGHT OK`.
 7. **Identity**: `vfi_snap.py` must print the card's `GPC dis/def/st=<GPC>/` and `SMC` line from `bench.conf`. A
    different card stops the run.
-8. **Temperature gate**: wait until READ_TEMP1 (raw) reaches `TMIN`, for up to `TCAP` seconds; if it does not, no shot
+8. **Temperature gate**: wait until READ_TEMP1 (raw) is inside `[TMIN, TSTART]` (`TSTART` is optional, no upper bound
+   when unset), for up to `TCAP` seconds; if it does not, no shot
    is fired (`TEMP GATE FAILED`, exit 16). The check uses the reading that passed: a second read after the loop could
    bounce one ADC step out of the band and fail the gate for nothing (fixed 2026-11-21).
 9. **Run** `bisect_shots.py` with a time limit (`RUNTO`) and the runner settings from the environment (`REPEAT`,
    `SHOTCAP`, `LOSTRUN`, `RESTORE_WAIT`, `CELLLOST`, `CLASSIFY_WRITE`, `SENTINEL`, `BAD0_FOLLOWUP`, `GFW_WAIT`,
-   `LOST_NOPARK`, `POISON_RESET`, `PARTIAL_CONTINUE`, `SHOOT_THROUGH_STALLS`, `STALLRUN`, `FLOOR`, `TRACE`,
-   `PARK_EACH`); the card's
+   `LOST_NOPARK`, `POISON_RESET`, `PARTIAL_CONTINUE`, `SHOOT_THROUGH_STALLS`, `STALLRUN`, `SENT0_CONTINUE`, `FLOOR`,
+   `TRACE`, `PARK_EACH`); the card's
    `SENTINEL_EXPECT` comes from `bench.conf`. The remote half exits with the runner's status and the launcher passes
    it on.
 10. **Hold**: when a line starts with `>>> GOLDILOCKS HELD` and the runner exited 0, `bootrun.sh` runs `ON_HOLD` if it

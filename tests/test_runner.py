@@ -505,6 +505,16 @@ class RunnerStallAndRecoveryTest(unittest.TestCase):
         self.assertEqual((shot_lines(out)[0]["kind"], shot_lines(out)[0]["stall"]), ("goldilocks", "1"))
         self.assertEqual(len(shots(ev)), 1)
 
+    def test_mistimed_dsov0_in_a_stall_is_mistimed_not_held(self):
+        rc, out, ev = run([CELL3], "Mu", SHOOT_THROUGH_STALLS=1, PARTIAL_CONTINUE=1)
+        self.assertEqual(rc, 14, out)                                    # never 15 (held), never a goldilocks
+        self.assertNotIn(">>> STALL DSOV0 HELD", out)
+        self.assertIn("MISTIMED at step 0 shot 0", out)
+        self.assertIn("no park: GFW is still booting", out)
+        self.assertNotIn("PARK", ev)
+        self.assertEqual((shot_lines(out)[0]["kind"], shot_lines(out)[0]["stall"]), ("mistimed", "1"))
+        self.assertEqual(len(shots(ev)), 1)
+
     def test_poison_in_a_stall_read_ends_the_boot(self):
         rc, out, ev = run([CELL3], "ju", GFW_WAIT=0.5, SHOOT_THROUGH_STALLS=1)
         self.assertEqual(rc, 10, out)

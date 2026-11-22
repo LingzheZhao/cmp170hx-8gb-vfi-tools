@@ -32,6 +32,7 @@ OUTCOMES = {
     "s": [{0x118234: 0x0, 0x820070: 0x75, 0x820410: 0}],             # stall: DSOV 1, CRC 0x75, sentinel 0
     "S": [{0x118234: 0x0, 0x820084: 0, 0x820070: 0x77, 0x820410: 0}],  # stall with DSOV 0, CRC 0x77 (a partial)
     "H": [{0x118234: 0x0, 0x820084: 0, 0x820410: 0}],                # stall with a goldilocks signature
+    "M": [{0x118234: 0x0, 0x820084: 0, 0x820410: 0}],                # the same, released late (MISTIMED)
     "j": [{0x118234: 0x0}, {0x118234: 0x0}, {0x118234: 0x0}, {0x820000: 0xBADF510E}],   # stall, then FUSECTRL
                                                                      # poisoned at the stall read (GFW_WAIT=0.5)
     "I": [{0x118234: 0x0, 0x820410: 0}],                             # stall: DSOV 1, CRC 0x55, sentinel 0 (init disturbed)
@@ -55,7 +56,8 @@ RECOVER = {"v": [{}], "V": [{0x820084: 0xBADF1701}]}
 POISON_RECOVER = {"R": [{}], "Q": [{0x820000: 0xBADF510E}]}
 RELEASE = {"L": "release_at=9 scheduled=0 via=alarm", "F": "release_at=0 scheduled=0 via=fallback", "N": None,
            "K": "release_at=10 scheduled=0 via=alarm", "G": "release_at=9 scheduled=0 via=alarm",
-           "X": "release_at=10 scheduled=0 via=alarm", "P": "release_at=9 scheduled=0 via=alarm"}
+           "X": "release_at=10 scheduled=0 via=alarm", "P": "release_at=9 scheduled=0 via=alarm",
+           "M": "release_at=9 scheduled=0 via=alarm"}
 cur = [os.environ.get("FAKE_BASE", "u")]   # the pre-shot baseline look sees this code
 shot = [0]
 look = [0]

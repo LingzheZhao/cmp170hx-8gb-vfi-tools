@@ -437,7 +437,11 @@ if True:
                         else:
                             what = "a goldilocks signature (DSOV 0, CRC 0x55, full mask)" if gold else "DSOV 0"
                             print("step %d shot %d v=%d td=%d pw=%d vr=%d f=%d: STALL DSOV0 %s" % (i, k, v, td, pw, vr, fs, stxt), flush=True)
-                            if mistimed: print("   MISTIMED: %s" % mistimed, flush=True)
+                            if mistimed:   # never held as a goldilocks or partial: not scored, and GFW still boots (no park)
+                                shot("mistimed", regs, "MISTIMED (%s; observed STALL DSOV0 %s)" % (mistimed, stxt), stall=True)
+                                print("MISTIMED at step %d shot %d (v=%d td=%d pw=%d vr=%d f=%d): %s; outcome STALL DSOV0, %s. "
+                                      "Not scored: power cycle (%d shots this boot)" % (i, k, v, td, pw, vr, fs, mistimed, what, nshots[0] + 1))
+                                print("   no park: GFW is still booting"); tr_dump(); sys.exit(14)
                             shot("goldilocks" if gold else "partial", regs, "STALL DSOV0 " + stxt, stall=True)
                             print(">>> STALL DSOV0 HELD (%s): %s while GFW is stalled; no sense, no next shot, no g/r/j; review it" % (TAG, what))
                             tr_dump(); sys.exit(15)

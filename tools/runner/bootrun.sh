@@ -14,12 +14,13 @@
 #      log; default $LOG_DIR/bootrun-<card>.last), NO_ON_HOLD=1 (never run ON_HOLD, whatever bench.conf says; the
 #      hunter sets it), and for the runner: TRACE, PARK_EACH, REPEAT, SHOTCAP, LOSTRUN, RESTORE_WAIT, CELLLOST,
 #      CLASSIFY_WRITE, SENTINEL, BAD0_FOLLOWUP, GFW_WAIT, LOST_NOPARK, PARTIAL_CONTINUE, SHOOT_THROUGH_STALLS, STALLRUN,
-#      SENT0_CONTINUE
+#      SENT0_CONTINUE, POISON_RESET
 #      (SENTINEL_EXPECT comes from the card function)
-# Exit codes: 1 bench never came up, 2 usage or config, 3 host guard or preflight failed, 4 plan checksum failed or
-# mismatched, 5 identity or die ID mismatch, 6 not a fresh boot, 7 bench did not power off, 8 runner transfer failed,
+# Exit codes: 1 bench never came up, 2 usage or config (or a run log it cannot write), 3 host guard or preflight
+# failed, 4 plan checksum failed or mismatched, 5 identity or die ID mismatch, 6 not a fresh boot (up longer than
+# FRESH_MAX, or the same boot id after the power cycle), 7 bench did not power off, 8 runner transfer failed,
 # 16 temperature gate (TMIN not reached within TCAP: no shot); otherwise the runner's own exit code (0 sequence done
-# or goldilocks held, 9 controller off, 10 tipped, 13 partial held, 14 mistimed, 15 DSOV 0 held during a GFW stall,
+# or goldilocks held, 7 park failed, 9 controller off, 10 tipped, 13 partial held, 14 mistimed, 15 DSOV 0 held during a GFW stall,
 # ...; see bisect_shots.py), 124 when
 # RUNTO cut the run, or ON_HOLD's exit code after a hold. The last line is "RESULT: ..." or the hold report.
 set -u

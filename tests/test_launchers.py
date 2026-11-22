@@ -192,7 +192,7 @@ case "$cmd" in
                  printf '%b\n' "${FAKE_REMOTE_OUT:-sequence exhausted, all under}"
                  echo "end temp_raw=380 runner_rc=${FAKE_REMOTE_RC:-0}"; exit "${FAKE_REMOTE_RC:-0}" ;;
   *uptime*) echo "${FAKE_UPTIME:-120}" ;;
-  *boot_id*) echo "fake-boot-id" ;;
+  *boot_id*) if [ -z "${FAKE_SAME_BOOT:-}" ] && grep -q POWEROFF "$FAKE_DIR/ssh.log"; then echo "fake-boot-id-2"; else echo "fake-boot-id"; fi ;;
   *sha256sum*) exec bash -c "$cmd" ;;
   *poweroff*) echo POWEROFF >> "$FAKE_DIR/ssh.log" ;;
 esac
@@ -396,6 +396,14 @@ class BootrunTest(unittest.TestCase):
         self.assertIn("power on (Wake-on-LAN)", out)
         self.assertIn("WOL 02:00:00:00:00:01 255.255.255.255", logs["ssh.log"])
         self.assertIn("POWEROFF", logs["ssh.log"])
+
+    def test_power_cycle_that_keeps_the_boot_id_is_not_fresh(self):
+        # wol/manual take the first missed ping as "off": with ping filtered and a host that never went down, the
+        # uptime alone (under FRESH_MAX) passed; the boot id has to change across the cycle
+        rc, out, logs = self.run_bootrun(NOCYCLE="0", FAKE_SAME_BOOT="1")
+        self.assertEqual(rc, 6, out)
+        self.assertIn("NOT A FRESH BOOT: boot_id fake-boot-id after the power cycle, fake-boot-id before", out)
+        self.assertNotIn("bash -s --", logs["ssh.log"])                 # no shot, nothing ran on the bench
 
 
 class GateTest(unittest.TestCase):

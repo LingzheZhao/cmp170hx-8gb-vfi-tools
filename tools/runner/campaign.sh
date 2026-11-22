@@ -6,8 +6,9 @@
 # exit other than 0/10 (exit 2). A sequence that runs out because its last step tipped ends with exit 2 "ended on a tip";
 # "sequence done" (exit 0) only when a boot exhausted it. Extra env (FLOOR, LOSTRUN, ...) passes through to bootrun.
 # Full output of every boot: $LOGDIR (default logs/ next to this script).
-cd "$(dirname "$0")" || exit 2
 CARD=$1; SEQFILE=$2; MAX=${3:-8}; start=0
+case "$SEQFILE" in /*) ;; *) SEQFILE=$PWD/$SEQFILE ;; esac   # a relative path is the caller's, read before the cd
+cd "$(dirname "$0")" || exit 2
 n=$(python3 -c "import json,sys;print(len(json.load(open(sys.argv[1]))))" "$SEQFILE") || { echo "CAMPAIGN: bad sequence file: stop"; exit 2; }
 LOGDIR=${LOGDIR:-$PWD/logs/campaign-$CARD-$(date +%Y%m%dT%H%M%S)}; mkdir -p "$LOGDIR" || exit 2; echo "full logs: $LOGDIR"
 # Summary lines shown per boot (the full output of every boot is kept in $LOGDIR), and the lines that stop the run.

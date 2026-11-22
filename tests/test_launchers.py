@@ -140,6 +140,19 @@ class CampaignTest(unittest.TestCase):
         self.assertIn("CAMPAIGN: sequence done", out)
         self.assertEqual(json.loads(calls[1][1]), self.SEQ[2:])
 
+    def test_a_relative_sequence_path_is_read_from_the_callers_directory(self):
+        # docs/RUNNER.md runs `tools/runner/campaign.sh example ladder.json 8` from the repository root
+        fx, _ = self.fixture([EXHAUSTED])
+        work = os.path.join(fx.tmp, "work")
+        os.mkdir(work)
+        with open(os.path.join(work, "ladder.json"), "w") as f:
+            json.dump(self.SEQ, f)
+        p = subprocess.run(NETLESS + ["bash", os.path.join(fx.tmp, "campaign.sh"), "e", "ladder.json"], env=fx.env,
+                           cwd=work, capture_output=True, text=True, timeout=60)
+        out = p.stdout + p.stderr
+        self.assertEqual(p.returncode, 0, out)
+        self.assertIn("CAMPAIGN: sequence done", out)
+
     def test_a_tip_on_the_last_step_is_not_sequence_done(self):
         fx, seq = self.fixture([("TIPPED at step 3 (v=344 td=-60): lost", 10)])
         rc, out, calls = fx.run("campaign.sh", "e", seq)

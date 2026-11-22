@@ -528,6 +528,8 @@ if True:
                     tr_dump()
                     sys.exit(10)
                 print("   poison reset (100 ms PEX_RST): %s" % hr, flush=True)
+                if hr.startswith("GFW not ready"):
+                    stalled = True   # rule 2 holds for the park too: park.py pulses PEX_RST, so end the boot unparked
                 if hr == "healthy_locked":
                     npreset[0] += 1
                     if nshots[0] >= SHOTCAP:

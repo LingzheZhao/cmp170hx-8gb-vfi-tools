@@ -233,6 +233,7 @@ sudo -E $PY tools/vfi_preflight.py --bdf $VFI_BDF --enable-decode
 sudo -E $PY tools/vfi_snap.py --rows --label cold-baseline       # keep this file private
 sudo -E $PY tools/vfi_hunt.py --v-dip 356 --budget 200            # stops and holds on a clean goldilocks
 sudo -E $PY tools/vfi_snap.py --label held                       # read the held state
+# After a hold, stop here: the park below drops the held state. Park only when you are done with it.
 sudo -E $PY tools/vfi_park.py                                     # always end here
 ```
 

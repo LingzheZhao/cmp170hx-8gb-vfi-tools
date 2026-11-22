@@ -305,6 +305,15 @@ class Classify(unittest.TestCase):
         p = subprocess.run([sys.executable, "-I", CIMP, "classify"], input=text, env=e, capture_output=True, text=True)
         return [x.split("-> ")[1] for x in p.stdout.strip().splitlines()]
 
+    def test_hunt_is_found_as_the_subcommand_only(self):
+        e = {k: v for k, v in os.environ.items() if not k.startswith("CIMP_")}
+        e["CIMP_CONFIG"] = os.devnull
+        p = subprocess.run([sys.executable, "-I", CIMP, "--profile", "hunt", "ladder"], env=e, capture_output=True, text=True)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("Hold rule", p.stdout)
+        p = subprocess.run([sys.executable, "-I", CIMP, "classify", "hunt"], env=e, capture_output=True, text=True)
+        self.assertNotIn("goldilocks_hunt.py", p.stdout + p.stderr)      # a file argument, not the hunter
+
     def test_ladder_names_the_partial_and_stall_holds(self):
         e = {k: v for k, v in os.environ.items() if not k.startswith("CIMP_")}
         out = subprocess.run([sys.executable, "-I", CIMP, "ladder"], env=e, capture_output=True, text=True).stdout

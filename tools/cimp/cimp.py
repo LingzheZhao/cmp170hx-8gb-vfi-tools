@@ -1275,8 +1275,10 @@ def main(argv=None):
     sp = sub.add_parser("classify", help="name the outcomes in runner log text (files or stdin)")
     sp.add_argument("files", nargs="*")
     sub.add_parser("test", help="the same as config --test")
-    if "hunt" in argv:
-        i = argv.index("hunt")
+    i = 0   # the subcommand is the first word after the global --profile option, not any 'hunt' in the arguments
+    while i < len(argv) and (argv[i] == "--profile" or argv[i].startswith("--profile=")):
+        i += 2 if argv[i] == "--profile" else 1
+    if i < len(argv) and argv[i] == "hunt":
         a = p.parse_args(argv[:i + 1])
         a.profile = pick_profile(a.profile)
         first_use(a)

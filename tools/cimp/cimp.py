@@ -1189,8 +1189,9 @@ def cmd_hunt(a, rest):
             pw = ssh_password(a.profile)
             if pw:
                 os.environ["SSHPASS"] = pw
-        if "--card" not in args and eff["card"]:
-            args += ["--card", eff["card"]]
+        if eff["card"]:
+            # argparse uses the last occurrence, so an explicit card takes precedence.
+            args[1:1] = ["--card", eff["card"]]
         if "--log-dir" not in args and eff["runner_host"] == "local":
             stamp = time.strftime("%Y%m%dT%H%M%S")
             args += ["--log-dir", os.path.join(abs_log_dir(eff), "run-%s" % stamp)]

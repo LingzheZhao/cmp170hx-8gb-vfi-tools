@@ -232,6 +232,11 @@ class Hunt(unittest.TestCase):
         self.assertIn("DRY RUN", out)
         self.assertIn("card x", out)
         self.assertIn("gate 395..406 raw", out)
+        for selection in (["--card", "y"], ["--card=y"]):
+            with self.subTest(selection=selection):
+                rc, out = run(["hunt", "run", f] + selection, self.home)
+                self.assertEqual(rc, 0, out)
+                self.assertIn("card y, bootrun", out)
 
 
 class Classify(unittest.TestCase):

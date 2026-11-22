@@ -270,17 +270,24 @@ POISON_RESET = os.environ.get("POISON_RESET") == "1"; npreset = [0]
 
 def poison_reset(card):
     """POISON_RESET: wait (reads only) for GFW to be ready, one 100 ms PEX_RST pulse, then the passive set. Returns the
-    passive state ('healthy_locked' means the boot may go on) or why no reset was sent."""
+    passive state, a failure message, or None if readiness could not be read before the reset."""
     try:
-        g_ = None
-        if restore(BDF, wait_s=RESTORE_WAIT):
-            with Bar0(BDF) as bar:
+        if not restore(BDF, wait_s=RESTORE_WAIT):
+            return None
+        with Bar0(BDF) as bar:
+            for attempt in range(1 + max(0, int(GFW_WAIT * 4))):
+                if attempt:
+                    time.sleep(0.25)
                 g_ = bar.rd32(0x118234)
-                for _ in range(int(GFW_WAIT * 4)):
-                    if bad(g_) or (g_ & 0xFF) == 0xFF: break
-                    time.sleep(0.25); g_ = bar.rd32(0x118234)
-        if g_ is None: return "config not restored before the reset"
-        if bad(g_) or (g_ & 0xFF) != 0xFF: return "GFW not ready (0x%08x): no reset (rule 2)" % g_
+                if type(g_) is not int or not 0 <= g_ < 0xFFFFFFFF or bad(g_):
+                    return None
+                if (g_ & 0xFF) == 0xFF:
+                    break
+            else:
+                return "GFW not ready (0x%08x): no reset (rule 2)" % g_
+    except Exception:
+        return None
+    try:
         rr = card.cmd("r", 0.3, total=2.0, until="released")
         if "released" not in (rr or ""): return "no 'released' reply to r"
         if not restore(BDF, wait_s=3.0): return "link down"
@@ -511,6 +518,10 @@ if True:
                 continue
             if POISON_RESET and out.startswith("poisoned "):
                 hr = poison_reset(card)
+                if hr is None:
+                    print("STOP: device readiness unreadable before poison reset", flush=True)
+                    tr_dump()
+                    sys.exit(10)
                 print("   poison reset (100 ms PEX_RST): %s" % hr, flush=True)
                 if hr == "healthy_locked":
                     npreset[0] += 1

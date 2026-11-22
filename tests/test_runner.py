@@ -530,6 +530,10 @@ class RunnerStallAndRecoveryTest(unittest.TestCase):
         self.assertEqual(rc, 10, out)
         self.assertIn("GFW not ready (0x00000101): no reset (rule 2)", out)
         self.assertNotIn("SER r", ev)
+        rc, out, ev = run([CELL3], "Uuu", POISON_RESET=1)                  # GFW all-ones (card gone) is not "ready"
+        self.assertEqual(rc, 10, out)
+        self.assertIn("STOP: device readiness unreadable before poison reset", out)
+        self.assertNotIn("SER r", ev)
         for code in ("h", "o"):                                           # hidden poison and poisoned/over0: no pulse
             with self.subTest(code=code):
                 rc, out, ev = run([CELL3], code + "uu", POISON_RESET=1)

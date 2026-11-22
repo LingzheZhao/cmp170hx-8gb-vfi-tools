@@ -42,6 +42,7 @@ OUTCOMES = {
     "R": [{0x820000: 0xBADF510E}],                                   # FUSECTRL poison; healthy after one 'r' pulse
     "Q": [{0x820000: 0xBADF510E}],                                   # FUSECTRL poison that survives the 'r' pulse
     "T": [{0x820000: 0xBADF510E, 0x118234: 0x101}],                  # FUSECTRL poison while GFW keeps booting
+    "U": [{0x820000: 0xBADF510E, 0x118234: 0xFFFFFFFF}],             # FUSECTRL poison, GFW all-ones (card gone)
     # release-timing codes (MISTIMED): registers as under unless noted
     "L": [{}], "F": [{}], "N": [{}], "W": [{}],
     "G": [{0x820084: 0}], "K": None, "X": [{0x820084: 0xBADF1701}], "P": [{0x820084: 0, 0x8200FC: 0xFFFFFEFE}],

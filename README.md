@@ -79,12 +79,16 @@ git clone https://github.com/darkmaniac7/cmp170hx-8gb-vfi-tools && cd cmp170hx-8
 
 ### With an agent (the way it is meant to run)
 
-Give the agent a shell on the machine with this checkout (it reaches the bench over ssh, as configured), then
-paste something like this and fill in the card:
+The repository has an [`AGENTS.md`](AGENTS.md) (with `CLAUDE.md` and `GEMINI.md` pointing to it), which most coding
+agents read on their own when they open the repository. It holds the rules they never break, a first-session
+walk-through that guides you from an empty bench to the first hunt, the loop, the exit codes, how to talk to the
+person at the bench, what to do on a hold, and a troubleshooting table. Give the agent a shell on the machine with
+this checkout (it reaches the bench over ssh, as configured), then paste something like this and fill in the card:
 
 ```text
 You are running a voltage-glitch campaign on a CMP 170HX 8 GB card with the tools in this repository.
-Read README.md, docs/AUTONOMOUS_AGENT.md and docs/SWEET_SPOT.md, then run `./cimp hunt strategy`.
+Read AGENTS.md and follow it, then README.md, docs/AUTONOMOUS_AGENT.md and docs/SWEET_SPOT.md, and run
+`./cimp hunt strategy`.
 Card: <label> (already set up in cimp). Goal: hold a goldilocks frame on it, then stop and tell me.
 Loop: `./cimp config --test`; plan one phase with `./cimp hunt <phase> --out <file>`; dry-run it with
 `./cimp hunt run <file> --card <label>` and show me the first dry run before you execute anything; run it with
@@ -178,6 +182,7 @@ in the slot stops the run at preflight.
 | `docs/METHOD.md` | How the lab searches now, and why: on-time release first, park-normalized shots, slow slew and a lower restore against link loss, restore 588 mV against the controller latch, delay as a knob and the 47 µs rule, CRC as a compass, what one card showed, the search order that worked best |
 | `docs/MEASUREMENTS.md` | What the bench measured: write time, release slip, the 36 µs width floor, EN_SW_OVERRIDE, sticky poison, the controller-off latch |
 | `docs/RUNNER.md` | How to use the runner and the launchers |
+| `AGENTS.md` | Instructions for an LLM agent that runs the bench: the rules, a first-session walk-through, the loop, exit codes, talking to the person at the bench, holds, troubleshooting (`CLAUDE.md` and `GEMINI.md` point to it) |
 | `docs/AUTONOMOUS_AGENT.md` | Running the bench with an LLM agent: access, the loop, the goldilocks hunter's loop and stop rules, the guard rails, what stays with people |
 | `docs/UPSTREAM_PR.md` | Pull request text for the firmware patches |
 

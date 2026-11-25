@@ -485,7 +485,8 @@ def run_checks(profile, eff, cards):
         env["SSHPASS"] = pw
     batch = [] if eff["ssh_auth"] == "password" else ["-o", "BatchMode=yes"]   # BatchMode turns password auth off
     probe = ("echo up; test -e %s && echo pico || echo nopico; test -x %s && echo py || echo nopy; "
-             "test -d %s && echo dir || echo nodir; lsmod | grep -qE '^(nvidia|nouveau) ' && echo nvidia || echo nonvidia"
+             "test -d %s && echo dir || echo nodir; "
+             "if mods=$(lsmod 2>/dev/null); then printf '%%s\\n' \"$mods\" | grep -qE '^(nvidia|nouveau) ' && echo nvidia || echo nonvidia; else echo lsmod_err; fi"
              % (shell_q(eff["pico_port"]), shell_q(eff["bench_py"]), shell_q(eff["bench_dir"])))
     try:
         p = subprocess.run(["ssh"] + batch + ["cimp-bench", probe], env=env, capture_output=True, text=True, timeout=40)

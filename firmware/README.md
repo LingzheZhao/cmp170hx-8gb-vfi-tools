@@ -1,6 +1,6 @@
 # Firmware and host patches for pico-ga100vfi
 
-Twelve changes to [dalzyu/pico-ga100vfi](https://github.com/dalzyu/pico-ga100vfi), made against commit `e1ebd97`.
+Fourteen changes to [dalzyu/pico-ga100vfi](https://github.com/dalzyu/pico-ga100vfi), made against commit `e1ebd97` (patches `0001`–`0012` from upstream `cmp170hx-8gb-vfi-tools`, plus hardening patches `0013`–`0014` in this fork).
 Apply them with `git am`:
 
 ```sh
@@ -8,9 +8,7 @@ cd pico-ga100vfi && git checkout e1ebd97
 git am /path/to/cmp170hx-8gb-vfi-tools/firmware/*.patch
 ```
 
-`series` lists them in order. Some are made with one line of context, so apply the whole series on exactly that base.
-Built with pico-sdk 2.3.1 and the Arm GNU toolchain 14.2 for `pico2_w` (RP2350A and RP2350B) and `pico2`, normal and
-debug builds, with no warnings.
+`series` lists all 14 patches in order (`0013` and `0014` apply on top of `0001`–`0012`, not standalone on bare `e1ebd97`). For Waveshare RP2350B-Plus-W, configure with `-DPICO_BOARD=waveshare_rp2350b_plus_w -DBOARD_RP2350B=ON` (normal 150 MHz build; do NOT use `-DDEBUG=ON`, which requests 1.50 V DVDD > 1.21 V RP2350 abs max).
 
 | After patch | Firmware marker | What the lab ran |
 |---|---|---|
@@ -186,6 +184,16 @@ aligned store, nothing in between. `rd32` already does a single load. In this re
 `DSOV_SET` write in classify (off by default since `0005`) and by `../tools/diag/enswtest.py`, so the lab's shots
 never went through it; any tool that writes a live register with it (a PCIe PHY register, for example) did. Host
 only, the firmware is unchanged.
+
+## 0013: harden `classify()` and `passive_snapshot()` against `0xBAD0`, non-IDLE FUSECTRL, and unready GFW
+
+Extends PRI poison detection to the full `0xBAD0xxxx..0xBADFxxxx` range, verifies `FUSECTRL` idle state and GFW readiness, and adds regression tests in `host/test_classify.py` and `host/test_passive_snapshot.py`.
+
+## 0014: harden firmware VREG/board/serial/WDT guards and host BAR0/classify/receipt checks
+
+- `firmware/CMakeLists.txt` + `firmware/boards/waveshare_rp2350b_plus_w.h`: refuses `-DDEBUG=ON` (1.50 V DVDD > 1.21 V RP2350 abs max) unless `-DALLOW_UNSAFE_OVERCLOCK_1V5=ON` is explicitly passed; provides the proper RP2350B QFN-80 / 16 MiB Flash board header and refuses mismatched `pico2`/`pico2_w` headers.
+- `firmware/pwmvid.c`: rejects truncated/overflowed serial lines, requires all 12 integer args with strict bounds in `g`, checks post-shot PMBus status readbacks and `revert` writes before reporting success, never emits `unlock MATCH` when writes/readbacks failed, and ties Core 1 watchdog feeding to a Core 0 heartbeat.
+- `host/ga100vfi/{bar0,classify,cli,glitch}.py`: validates GA100 PCI vendor/device ID and driver binding before touching config space or BAR0, adds 4-byte alignment/bounds checks, makes `baseline` read-only, aborts `classify()` on dead `0xFFFFFFFF` or non-IDLE `FUSECTRL` after 1 read, and rejects failed receipts in `unlock`/`attempt`/`revert`.
 
 ## Not a firmware change: park and rescue
 

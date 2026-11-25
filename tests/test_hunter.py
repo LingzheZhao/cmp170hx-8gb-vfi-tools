@@ -572,8 +572,8 @@ class RunDriverTest(unittest.TestCase):
         plan = self.plan("slow", "--v", "375")
         for boot, rc_want, text in (
                 ((">>> GOLDILOCKS HELD (card t) v=375 td=62\nHOLD SEEN 01:02:03: held", 0), 4, "GOLDILOCKS HELD"),
-                ((">>> STALL DSOV0 HELD (card t): a goldilocks signature (DSOV 0, CRC 0x55, full mask) while GFW is stalled", 15), 4, "GOLDILOCKS HELD"),
-                ((">>> STALL DSOV0 HELD (card t): DSOV 0 while GFW is stalled", 15), 4, "a DSOV-0 frame is held"),
+                ((">>> STALL DSOV0 HELD (card t): a goldilocks signature (DSOV 0, CRC 0x55, full mask) while GFW is stalled", 15), 4, "STALL DSOV0 HELD"),
+                ((">>> STALL DSOV0 HELD (card t): DSOV 0 while GFW is stalled", 15), 4, "STALL DSOV0 HELD"),
                 ((">>> PARTIAL HELD (card t); no sense or next shot", 13), 4, "a DSOV-0 frame is held"),
                 (("step 0 v=375 td=62 pw=198 vr=750 f=0: CONTROLLER OFF (0x2042, 41 mV)\nSTOP: power cycle needed", 9), 3, "controller latch"),
                 (("MISTIMED at step 0 shot 0 (v=375): release_at=9 us; outcome under. Not scored", 14), 3, "mistimed"),
@@ -592,6 +592,36 @@ class RunDriverTest(unittest.TestCase):
                 self.assertEqual(len(calls), 1)
                 if text == "GOLDILOCKS HELD":
                     self.assertIn("This tool never burns", out)
+                if text == "STALL DSOV0 HELD":
+                    # GFW-stalled hold MUST NEVER upgrade to GOLDILOCKS or prompt active sense/burn!
+                    self.assertNotIn("stopped: GOLDILOCKS HELD", out)
+                    self.assertNotIn("Run your own active sense", out)
+                    self.assertIn("FORBIDDEN", out)
+
+    def test_old_plan_without_fail_stop_inherits_safe_defaults_and_contradiction_refused(self):
+        plan = self.plan("slow", "--v", "375")
+        p_obj = json.loads(open(plan).read())
+        p_obj["env"].pop("FAIL_STOP", None)
+        p_obj["env"].pop("BAD0_FOLLOWUP", None)
+        open(plan, "w").write(json.dumps(p_obj))
+        # Record what bootrun sees
+        with open(self.bootrun, "w") as f:
+            f.write('#!/bin/bash\necho "ENV:$FAIL_STOP:$BAD0_FOLLOWUP"\necho "sequence exhausted"\nexit 0\n')
+        os.chmod(self.bootrun, 0o755)
+        rc, out, _ = self.drive(plan, [], "--execute")
+        self.assertEqual(rc, 0, out)
+        boot_out = open(os.path.join(self.tmp, "logs", "boot-01.out")).read()
+        self.assertIn("ENV:1:0", boot_out)
+
+        # Contradictory FAIL_STOP=1 + BAD0_FOLLOWUP=1 is refused before running bootrun
+        p_obj["env"]["FAIL_STOP"] = 1
+        p_obj["env"]["BAD0_FOLLOWUP"] = 1
+        open(plan, "w").write(json.dumps(p_obj))
+        self.reset_fake()
+        rc2, out2, calls2 = self.drive(plan, [DONE], "--execute")
+        self.assertEqual(rc2, 2, out2)
+        self.assertIn("contradictory plan env", out2)
+        self.assertEqual(calls2, [])
 
     def test_shoot_through_needs_the_owner(self):
         plan = self.plan("train", "--shoot-through")

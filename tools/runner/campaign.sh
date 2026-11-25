@@ -13,7 +13,7 @@ n=$(python3 -c "import json,sys;print(len(json.load(open(sys.argv[1]))))" "$SEQF
 LOGDIR=${LOGDIR:-$PWD/logs/campaign-$CARD-$(date +%Y%m%dT%H%M%S)}; mkdir -p "$LOGDIR" || exit 2; echo "full logs: $LOGDIR"
 # Summary lines shown per boot (the full output of every boot is kept in $LOGDIR), and the lines that stop the run.
 SHOW="START|cell |step |TIPPED|MISTIMED|exhausted|NO DIP|GOLDILOCKS|HOLD|PARTIAL|ON_HOLD|CONTROLLER OFF|STOP|FAILED|MISMATCH|park|prime_at|release_at|WARN|FAIL|ABORT|hidden|poison|glitch vd=|boot pmbus|observed|rail_code=|hold_at|unlock:|sentinel|root port|Traceback|Error|RESULT"
-STOPRE="NO DIP|IDENTITY MISMATCH|PREFLIGHT FAILED|PLAN SHA MISMATCH|PLAN SHA FAILED|HOST GUARD|HOLD LINE BUT RUNNER RC|never came up|did not go down|NOT A FRESH BOOT|POWER STILL ON|CONTROLLER OFF|park after lost shot FAILED|PARK FAILED|MISTIMED|AssertionError|Traceback|STOP:|TEMP GATE FAILED|RUNNER TRANSFER FAILED"
+STOPRE="NO DIP|IDENTITY MISMATCH|PREFLIGHT FAILED|PLAN SHA MISMATCH|PLAN SHA FAILED|HOST GUARD|HOLD LINE BUT RUNNER RC|never came up|did not go down|NOT A FRESH BOOT|POWER STILL ON|CONTROLLER OFF|park after lost shot FAILED|PARK FAILED|MISTIMED|AssertionError|Traceback|STOP:|TEMP GATE FAILED|RUNNER TRANSFER FAILED|FAIL_STOP=1"
 for b in $(seq 1 $MAX); do
   [ $start -ge $n ] && { echo "CAMPAIGN: ended on a tip past the last step"; exit 2; }
   SEQ=$(python3 -c "import json,sys;print(json.dumps(json.load(open(sys.argv[1]))[int(sys.argv[2]):]))" "$SEQFILE" "$start")

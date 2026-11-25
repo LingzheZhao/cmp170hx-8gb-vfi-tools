@@ -600,6 +600,84 @@ class SnapTests(unittest.TestCase):
                 self.assertIn("poisoned", out)
                 self.assertFalse(os.path.exists(os.path.join(d, "s")))
 
+    def test_vfi_snap_zero_io_after_first_error_or_poison(self):
+        import json
+        import vfi_snap as vs
+
+        # 1) read_fuse_rows: OSError on DATA read MUST leave ZERO reads and ZERO writes afterwards!
+        ops = []
+        state = {"addr": 0}
+
+        def fake_rd(off):
+            ops.append(("rd", off))
+            if off == vs.ADDR:
+                return state["addr"]
+            if off == vs.CTRL:
+                return 0xE0040000
+            if off == vs.DATA:
+                raise OSError("simulated bus fault")
+            return 0
+
+        def fake_wr(off, val):
+            ops.append(("wr", off, val))
+            if off == vs.ADDR:
+                state["addr"] = val
+
+        with self.assertRaises(OSError):
+            vs.read_fuse_rows(fake_rd, fake_wr, lambda: True, (8, 9))
+        # The very last operation MUST be the failing rd(DATA) — ZERO finally CTRL read or ADDR restore write!
+        self.assertEqual(ops[-1], ("rd", vs.DATA))
+
+        # 2) Poison on first ALIAS stops immediately (zero subsequent alias or per_gpc reads!)
+        class RecordingMv:
+            def __init__(self, values):
+                self.values = dict(values)
+                self.reads = []
+                self.writes = []
+
+            def __getitem__(self, idx):
+                off = idx * 4
+                self.reads.append(off)
+                return self.values.get(off, 0)
+
+            def __setitem__(self, idx, val):
+                self.writes.append((idx * 4, val))
+
+        base_regs = {vs.CTRL: 0xE0040000, vs.REGS["DSOV"]: 1, vs.REGS["CRC_STATUS"]: 0x55,
+                     vs.REGS["DEVIDA"]: 0x20C2, vs.REGS["GFW_BOOT_118234"]: 0xFF,
+                     vs.REGS["PLM_fc"]: 0xFFFFFFFF}
+        base_regs[vs.ALIASES[0]] = 0xBAD01234
+        mv = RecordingMv(base_regs)
+        args = type("A", (), {"bdf": BDF, "label": "t", "outdir": tempfile.mkdtemp(),
+                              "rows": False, "die_id": None})()
+        with self.assertRaises(vc.BenchStop):
+            vs.snapshot(args, {"vendor": "0x10de", "device": "0x20c2", "driver": None}, 0x0006, mv)
+        self.assertEqual(mv.reads[-1], vs.ALIASES[0])
+        self.assertNotIn(vs.ALIASES[1], mv.reads)
+        self.assertEqual(mv.writes, [])
+
+        # 3) Poison on first per_gpc register stops immediately
+        base_regs2 = dict(base_regs)
+        del base_regs2[vs.ALIASES[0]]
+        base_regs2[0x820760] = 0xBADF0001
+        mv2 = RecordingMv(base_regs2)
+        with self.assertRaises(vc.BenchStop):
+            vs.snapshot(args, {"vendor": "0x10de", "device": "0x20c2", "driver": None}, 0x0006, mv2)
+        self.assertEqual(mv2.reads[-1], 0x820760)
+        self.assertNotIn(0x820764, mv2.reads)
+
+        # 4) load_die_id rejects snapshots whose state_unchanged_by_row_read is False
+        with tempfile.TemporaryDirectory() as td:
+            bad_snap = os.path.join(td, "bad.json")
+            with open(bad_snap, "w") as f:
+                json.dump({
+                    "rows": ["0x00000000"] * 512,
+                    "rows_match": True,
+                    "state_unchanged_by_row_read": False,
+                }, f)
+            with self.assertRaises(vc.BenchStop):
+                vs.load_die_id(bad_snap)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

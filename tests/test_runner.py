@@ -614,6 +614,12 @@ class RunnerStallAndRecoveryTest(unittest.TestCase):
         rc, out, ev = run([STD], "u", FAIL_STOP=1)
         self.assertEqual(rc, 0, out)
         self.assertNotIn("PARK", ev)
+        # Contradictory FAIL_STOP=1 + BAD0_FOLLOWUP=1 or POISON_RESET=1 refused before any shot
+        for bad_env in ({"FAIL_STOP": 1, "BAD0_FOLLOWUP": 1}, {"FAIL_STOP": 1, "POISON_RESET": 1}):
+            rc2, out2, ev2 = run([STD], "u", **bad_env)
+            self.assertEqual(rc2, 2, out2)
+            self.assertIn("FAIL_STOP=1 forbids", out2)
+            self.assertNotIn("SHOT", ev2)
 
     def test_shot_lines_carry_the_geometry_and_mark_the_first_shot(self):
         seq = [[381, 62, 1, 198, 750, 0, 2, 0, -20, 0, 117, 150], [375, 60, 3, 120, 700, 1, 1, 0, -20, 0, 300, 100]]

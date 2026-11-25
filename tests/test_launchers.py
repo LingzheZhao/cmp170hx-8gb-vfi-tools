@@ -195,6 +195,18 @@ class CampaignTest(unittest.TestCase):
         for frag in ("glitch vd=", "hold_at=none", "boot pmbus", "observed:", "rail_code="):
             self.assertIn(frag, out)
 
+    def test_fail_stop_stops_firstshot_and_campaign_immediately_even_on_rc10(self):
+        fx, seq = self.fixture([("TIPPED at step 0: lost (FAIL_STOP=1: no park, no auto-reset)", 10),
+                                ("sequence exhausted", 0)])
+        rc, out, calls = fx.run("campaign.sh", "e", seq)
+        self.assertEqual(rc, 2, out)
+        self.assertEqual(len(calls), 1)
+        fx2, _ = self.fixture([("TIPPED at step 0: lost (FAIL_STOP=1: no park, no auto-reset)", 10),
+                               ("sequence exhausted", 0)])
+        rc2, out2, calls2 = fx2.run("firstshot.sh", "e", json.dumps([[344, -60], [338, -60]]))
+        self.assertEqual(rc2, 2, out2)
+        self.assertEqual(len(calls2), 1)
+
 
 FAKE_BIN = {
     "ssh": r'''#!/bin/bash

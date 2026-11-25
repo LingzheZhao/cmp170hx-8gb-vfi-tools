@@ -1,20 +1,16 @@
 #!/usr/bin/env python3
 """Snapshot a CMP 170HX 8 GB card's fuse, gate and PCIe option registers to a private JSON file.
 
-Default mode: BAR0 READS ONLY, no register or config-space writes. FUSECTRL is read first; on 0xBADFxxxx or
-0xBAD0xxxx the tool stops without reading anything else.
+Default mode: BAR0 READS ONLY, no register or config-space writes. FUSECTRL is read first; on 0xBAD0xxxx..0xBADFxxxx
+or 0xFFFFFFFF the tool stops immediately with ZERO subsequent BAR0 reads or writes.
 
 --rows also reads the 512 main fuse rows twice through the fuse controller's READ command. That writes only
-FUSEADDR (0x820004) and FUSECTRL = 1 (CMD_READ), then restores FUSEADDR. It never writes DEBUGCTRL (0x820060),
-never selects RIR rows and never programs anything. Both passes must match.
+FUSEADDR (0x820004) and FUSECTRL = 1 (CMD_READ), then restores FUSEADDR ONLY on clean completion (never in finally
+after an error). It never writes DEBUGCTRL (0x820060), never selects RIR rows and never programs anything.
 
 --die-id DUMP reads fuse rows 8-15 (the die ID) once with the same CMD_READ and compares them with DUMP, the 512-row
-dump a burn plan was made from (its ff_rows, or the rows of a --rows snapshot whose two passes matched). Cards with the
-same GPC/SM/ceiling pass every other identity check; these rows tell them apart. Exit 5 when they differ. Only row
-numbers are printed, never the values.
-
-Run it on a healthy card (fresh boot, or right after vfi_park.py) or on a state held by vfi_hunt.py. With --port
-the rail is checked over I2C first and config space is not touched if the GPU is in brown-out.
+dump a burn plan was made from (its ff_rows, or the rows of a --rows snapshot whose two passes matched and whose
+gate/status state did not change). Exit 5 when they differ. Only row numbers are printed, never the values.
 
 The output file is mode 0600. Fuse rows identify the card: keep dumps private.
 """
@@ -45,6 +41,7 @@ REGS = {
     "ROP_L2_DISABLE": 0x8202C4, "ROP_L2_DEFECTIVE": 0x8205E8, "FB_CFG1_9a0204": 0x9A0204, "FB_LMR_100ce0": 0x100CE0,
     "OPT_DISABLE_GEN3_SPEED": 0x820250, "OPT_PCIE_MAGIC_BITS_D": 0x820520, "OPT_PCIE_BOOT_GEN3_DIS": 0x820580,
 }
+ALLOW_ALL_ONES_REGS = {"PLM_e0", "PLM_f4", "PLM_f8", "PLM_fc", "FPF_824314"}
 ALIASES = [0x820148, 0x820E20, 0x8207F4, 0x820158, 0x820324, 0x820434, 0x821108, 0x821058, 0x82074C,
            0x8206FC, 0x820644, 0x820640, 0x820410, 0x82063C, 0x820B98, 0x8205A8, 0x821064]
 TPC_DEFECTIVE = [0x8205C8, 0x820508, 0x82050C, 0x820514, 0x820564, 0x8205AC, 0x820B84, 0x820B80]
@@ -52,39 +49,69 @@ TPC_RECONFIG = [0x820788, 0x82078C, 0x820790, 0x820794, 0x820798, 0x82079C, 0x82
 DIE_ID_ROWS = tuple(range(8, 16))   # fuse rows that carry the die ID
 
 
+def _ctrl_is_idle(c: int) -> bool:
+    return (
+        c != vc.UNREADABLE
+        and not vc.is_poisoned(c)
+        and ((c >> 16) & 31) == 4
+        and (c & 0xF) == 0
+    )
+
+
+def _poll_ctrl_idle(rd, row, timeout=0.2):
+    """Single FUSECTRL read per iteration; stops immediately on poison, 0xFFFFFFFF, or timeout."""
+    deadline = time.monotonic() + timeout
+    first = True
+    while True:
+        if not first and time.monotonic() > deadline:
+            raise RuntimeError(f"CMD_READ timeout at row {row}")
+        first = False
+        c = rd(CTRL)
+        if c == vc.UNREADABLE or vc.is_poisoned(c):
+            raise RuntimeError(f"controller poisoned/dead ({c:#010x}) at row {row}")
+        if _ctrl_is_idle(c):
+            return c
+        if time.monotonic() > deadline:
+            raise RuntimeError(f"CMD_READ timeout at row {row}")
+
+
 def read_fuse_rows(rd, wr, idle, rows, timeout=0.2):
-    """One CMD_READ per row; FUSEADDR is restored afterwards. RuntimeError on a latch failure, a poison or a timeout."""
+    """One CMD_READ per row; FUSEADDR is restored ONLY on clean completion (never in finally on error)."""
     orig = rd(ADDR)
+    if orig == vc.UNREADABLE or vc.is_poisoned(orig):
+        raise RuntimeError(f"FUSEADDR reads {orig:#010x} before row read")
     got = {}
-    try:
-        for row in rows:
-            wr(ADDR, row)
-            if rd(ADDR) != row:
-                raise RuntimeError(f"FUSEADDR did not latch row {row}")
-            wr(CTRL, 1)
-            t = time.monotonic() + timeout
-            while not idle():
-                c = rd(CTRL)
-                if vc.is_poisoned(c):
-                    raise RuntimeError(f"controller poisoned ({c:#010x}) at row {row}")
-                if time.monotonic() > t:
-                    raise RuntimeError(f"CMD_READ timeout at row {row}")
-            got[row] = rd(DATA)
-    finally:
-        if idle():
-            wr(ADDR, orig)
+    for row in rows:
+        wr(ADDR, row)
+        latched = rd(ADDR)
+        if latched == vc.UNREADABLE or vc.is_poisoned(latched):
+            raise RuntimeError(f"FUSEADDR poisoned/dead ({latched:#010x}) latching row {row}")
+        if latched != row:
+            raise RuntimeError(f"FUSEADDR did not latch row {row}")
+        wr(CTRL, 1)
+        _poll_ctrl_idle(rd, row, timeout=timeout)
+        got[row] = rd(DATA)
+    # Only reached when every single row succeeded without any exception!
+    if _ctrl_is_idle(rd(CTRL)):
+        wr(ADDR, orig)
     return got
 
 
 def load_die_id(path):
     """The die ID rows (8-15) of a 512-row dump, as ints: a dump's ff_rows, or the rows list this tool's --rows writes
-    (only when its two passes matched)."""
+    (only when its two passes matched AND state_unchanged_by_row_read is not False and no rows_error)."""
     with open(path) as f:
         d = json.load(f)
+    if d.get("rows_error") or d.get("read_errors"):
+        raise vc.BenchStop(f"{path}: dump recorded row read errors; refuse as die-ID reference")
     rows = d.get("ff_rows")
+    if rows is None and isinstance(d.get("all_rows"), dict):
+        rows = d["all_rows"]
     if rows is None and isinstance(d.get("rows"), list):
         if d.get("rows_match") is not True:
             raise vc.BenchStop(f"{path}: the two passes of its row read differed; use a dump whose passes matched")
+        if d.get("state_unchanged_by_row_read") is False:
+            raise vc.BenchStop(f"{path}: gate/status state changed during its row read; refuse as die-ID reference")
         rows = {str(i): v for i, v in enumerate(d["rows"])}
     rows = rows or {}
     want = {}
@@ -165,9 +192,13 @@ def snapshot(a, ident, cfg_cmd, mv32) -> int:
             raise RuntimeError(f"write outside the CMD_READ allowlist: {off:#x}={val:#x}")
         mv32[off // 4] = val
 
-    def idle():
-        c = rd(CTRL)
-        return ((c >> 16) & 31) == 4 and (c & 3) == 0
+    def rd_checked(off, label, allow_all_ones=False):
+        val = rd(off)
+        if vc.is_poisoned(val):
+            raise vc.BenchStop(f"{label} reads {val:#010x}: poisoned controller; stopped immediately.")
+        if not allow_all_ones and val == vc.UNREADABLE:
+            raise vc.BenchStop(f"{label} reads {val:#010x}: dead BAR0; stopped immediately.")
+        return val
 
     ctrl = rd(CTRL)                      # first BAR0 read, always
     if ctrl == vc.UNREADABLE or vc.is_poisoned(ctrl):
@@ -177,20 +208,28 @@ def snapshot(a, ident, cfg_cmd, mv32) -> int:
            "utc": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")}
     r = {}
     for k, v in REGS.items():
-        val = rd(v)
-        if vc.is_poisoned(val):
-            raise vc.BenchStop(f"{k} reads {val:#010x}: poisoned controller; stopped immediately.")
-        r[k] = val
+        if k == "FUSECTRL":
+            r[k] = ctrl
+            continue
+        r[k] = rd_checked(v, k, allow_all_ones=(k in ALLOW_ALL_ONES_REGS))
     out["regs"] = {k: f"{v:#010x}" for k, v in r.items()}
-    alias_vals = {x: rd(x) for x in ALIASES}
-    for x, val in alias_vals.items():
-        if vc.is_poisoned(val):
-            raise vc.BenchStop(f"alias {x:#08x} reads {val:#010x}: poisoned controller; stopped immediately.")
+
+    # Fail-fast on EVERY alias read (zero further reads after first poison/dead BAR0).
+    alias_vals = {}
+    for x in ALIASES:
+        alias_vals[x] = rd_checked(x, f"alias {x:#08x}")
     out["aliases"] = {f"{x:#08x}": f"{val:#010x}" for x, val in alias_vals.items()}
     out["aliases_zero"] = sum(1 for val in alias_vals.values() if val == 0)
-    g = {"tpc_disable": [rd(0x820760 + 4 * i) for i in range(8)], "tpc_defective": [rd(x) for x in TPC_DEFECTIVE],
-         "tpc_reconfig": [rd(x) for x in TPC_RECONFIG], "reconfig_override": [rd(0x820A40 + 4 * i) for i in range(8)],
-         "tpc_status": [rd(0x820C38 + 4 * i) for i in range(8)], "pes_status": [rd(0x820DBC + 4 * i) for i in range(8)]}
+
+    # Fail-fast on EVERY per_gpc read (zero further reads after first poison/dead BAR0).
+    g = {
+        "tpc_disable": [rd_checked(0x820760 + 4 * i, f"tpc_disable[{i}]") for i in range(8)],
+        "tpc_defective": [rd_checked(x, f"tpc_defective[{i}]") for i, x in enumerate(TPC_DEFECTIVE)],
+        "tpc_reconfig": [rd_checked(x, f"tpc_reconfig[{i}]") for i, x in enumerate(TPC_RECONFIG)],
+        "reconfig_override": [rd_checked(0x820A40 + 4 * i, f"reconfig_override[{i}]") for i in range(8)],
+        "tpc_status": [rd_checked(0x820C38 + 4 * i, f"tpc_status[{i}]") for i in range(8)],
+        "pes_status": [rd_checked(0x820DBC + 4 * i, f"pes_status[{i}]") for i in range(8)],
+    }
     out["per_gpc"] = {k: [f"{v:#x}" for v in vs] for k, vs in g.items()}
     gdef, gst = r["GPC_DEFECTIVE"], r["GPC_STATUS"]
     out["sm_ceiling_nondefective"] = sum(2 * (8 - bin(g["tpc_defective"][i] & 0xFF).count("1"))
@@ -212,7 +251,7 @@ def snapshot(a, ident, cfg_cmd, mv32) -> int:
     warn = []
     if r["DEBUGCTRL"] != 0:
         warn.append("DEBUGCTRL nonzero: stop, never write it")
-    if not idle():
+    if not _ctrl_is_idle(ctrl):
         warn.append("fuse controller not idle")
     if r["DEVIDA"] & 0xFFFF not in (0x20C2, 0x2082):
         warn.append(f"DEVIDA={r['DEVIDA']:#x} (expected 0x20c2)")
@@ -224,38 +263,36 @@ def snapshot(a, ident, cfg_cmd, mv32) -> int:
     if a.rows:
         if any(w.startswith(("DEBUGCTRL", "fuse controller")) for w in warn):
             raise vc.BenchStop("refusing the row read: " + "; ".join(warn))
-        orig_addr = rd(ADDR)
+        orig_addr = rd_checked(ADDR, "FUSEADDR")
         keys = ("EN_SW_OVERRIDE", "DSOV", "EFP", "SBFE", "GPC_STATUS", "FBP_STATUS", "DEBUGCTRL")
-        before = {k: rd(REGS[k]) for k in keys}
+        before = {k: rd_checked(REGS[k], k) for k in keys}
         try:
             for _ in range(2):
                 cur = []
                 for row in range(512):
                     wr(ADDR, row)
-                    if rd(ADDR) != row:
+                    latched = rd(ADDR)
+                    if latched == vc.UNREADABLE or vc.is_poisoned(latched):
+                        raise RuntimeError(f"FUSEADDR poisoned/dead ({latched:#010x}) at row {row}")
+                    if latched != row:
                         raise RuntimeError(f"FUSEADDR did not latch row {row}")
                     wr(CTRL, 1)
-                    t = time.monotonic() + 0.2
-                    while not idle():
-                        c = rd(CTRL)
-                        if vc.is_poisoned(c):
-                            raise RuntimeError(f"controller poisoned ({c:#010x}) at row {row}")
-                        if time.monotonic() > t:
-                            raise RuntimeError(f"CMD_READ timeout at row {row}")
+                    _poll_ctrl_idle(rd, row, timeout=0.2)
                     cur.append(rd(DATA))
                 rows.append(cur)
-        except RuntimeError as e:
-            out["rows_error"] = str(e)
-            warn.append("ROW READ FAILED: " + str(e))
-        finally:
-            if "rows_error" not in out and idle():
+            # Clean-path-only FUSEADDR restore (NEVER inside finally on error!).
+            c_end = rd(CTRL)
+            if _ctrl_is_idle(c_end):
                 wr(ADDR, orig_addr)
-            elif "rows_error" in out:
-                warn.append("row read errored; FUSEADDR not restored and no further BAR0 reads performed")
             else:
                 warn.append("controller busy after the row read; FUSEADDR not restored")
+        except Exception as e:  # noqa: BLE001 — catch RuntimeError, OSError, etc.
+            out["rows_error"] = str(e)
+            warn.append("ROW READ FAILED: " + str(e))
+            warn.append("row read errored; FUSEADDR not restored and no further BAR0 reads performed")
+
         if "rows_error" not in out:
-            after = {k: rd(REGS[k]) for k in keys}
+            after = {k: rd_checked(REGS[k], k) for k in keys}
             out["state_unchanged_by_row_read"] = before == after
             if before != after:
                 warn.append("gate/status registers changed during the row read")
@@ -268,13 +305,14 @@ def snapshot(a, ident, cfg_cmd, mv32) -> int:
         else:
             out["state_unchanged_by_row_read"] = None
 
-    if a.die_id:
+    # Do NOT begin --die-id BAR0 accesses if --rows already errored!
+    if a.die_id and "rows_error" not in out:
         want = load_die_id(a.die_id)
         if any(w.startswith(("DEBUGCTRL", "fuse controller")) for w in warn):
             raise vc.BenchStop("refusing the die ID read: " + "; ".join(warn))
         try:
-            got = read_fuse_rows(rd, wr, idle, DIE_ID_ROWS)
-        except RuntimeError as e:
+            got = read_fuse_rows(rd, wr, lambda: _ctrl_is_idle(rd(CTRL)), DIE_ID_ROWS)
+        except Exception as e:  # noqa: BLE001
             out["die_id_error"] = str(e)
             warn.append("DIE ID READ FAILED: " + str(e))
         else:

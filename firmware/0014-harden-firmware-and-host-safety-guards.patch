@@ -1,0 +1,1014 @@
+From 2d6e70c6107a2d92bff81a6a5c421a0b3a0107ba Mon Sep 17 00:00:00 2001
+From: Lingzhe Zhao <zhaolingzhe@westlake.edu.cn>
+Date: Wed, 25 Nov 2026 21:22:04 +0900
+Subject: [PATCH] Harden firmware VREG/board/serial/WDT guards and host
+ BAR0/classify/receipt checks
+
+---
+ firmware/CMakeLists.txt                    |  43 +++++--
+ firmware/boards/waveshare_rp2350b_plus_w.h |  55 +++++++++
+ firmware/pwmvid.c                          | 116 ++++++++++++++-----
+ host/ga100vfi/bar0.py                      | 103 +++++++++++++++--
+ host/ga100vfi/classify.py                  | 125 +++++++++++++++------
+ host/ga100vfi/cli.py                       |  30 +++--
+ host/ga100vfi/glitch.py                    |  20 +++-
+ host/test_classify.py                      | 115 +++++++++++++++++--
+ 8 files changed, 506 insertions(+), 101 deletions(-)
+ create mode 100644 firmware/boards/waveshare_rp2350b_plus_w.h
+
+diff --git a/firmware/CMakeLists.txt b/firmware/CMakeLists.txt
+index d04365f..e802bdd 100644
+--- a/firmware/CMakeLists.txt
++++ b/firmware/CMakeLists.txt
+@@ -1,4 +1,8 @@
+ cmake_minimum_required(VERSION 3.13)
++
++# Register local board headers (including waveshare_rp2350b_plus_w) before SDK init.
++list(APPEND PICO_BOARD_HEADER_DIRS "${CMAKE_CURRENT_LIST_DIR}/boards")
++
+ include($ENV{PICO_SDK_PATH}/pico_sdk_init.cmake)
+ project(pwmvid C CXX ASM)
+ pico_sdk_init()
+@@ -9,10 +13,12 @@ pico_sdk_init()
+ option(BOARD_RP2350A "Build for RP2350A (Official Pico 2 / Pico 2 W)" OFF)
+ option(BOARD_RP2350B "Build for RP2350B (Waveshare RP2350B-Plus-W)" OFF)
+ 
+-# DEBUG: budget oscilloscope build — 400 MHz overclock + NVVDD ADC trace
+-# (PIN_NVVDD_ADC in board.h: GP42 on RP2350B, GP26 on RP2350A).
+-# Normal build: stock clocks, no ADC, no ADC-pin wire.
+-option(DEBUG "Debug build: 400 MHz OC + NVVDD ADC trace" OFF)
++# DEBUG: budget oscilloscope build — 400 MHz overclock + 1.50 V VREG + NVVDD ADC trace.
++# WARNING: 1.50 V DVDD EXCEEDS the RP2350 datasheet absolute maximum of 1.21 V!
++# Normal bench runs MUST use the stock 150 MHz build (-DDEBUG=OFF).
++option(DEBUG "Debug build: 400 MHz OC + 1.50V VREG + NVVDD ADC trace (UNSAFE OVERVOLTAGE)" OFF)
++option(ALLOW_UNSAFE_OVERCLOCK_1V5 "Explicitly acknowledge 1.50V DVDD > 1.21V RP2350 abs max for DEBUG builds" OFF)
++option(ALLOW_PICO2W_BOARD_HEADER "Allow mismatched pico2/pico2_w SDK board header with BOARD_RP2350B (stock build only)" OFF)
+ 
+ if(BOARD_RP2350A AND BOARD_RP2350B)
+     message(FATAL_ERROR "enable only one of BOARD_RP2350A / BOARD_RP2350B")
+@@ -26,14 +32,37 @@ else()
+     set(BOARD_DEF BOARD_RP2350B)
+     message(STATUS "pico-ga100vfi: no family given, defaulting to RP2350B")
+ endif()
+-message(STATUS "pico-ga100vfi: board family = ${BOARD_DEF}")
++message(STATUS "pico-ga100vfi: board family = ${BOARD_DEF} (PICO_BOARD=${PICO_BOARD})")
++
++# Guard against RP2350A/B SDK header mismatch (pico2/pico2_w declares PICO_RP2350A=1 & 4 MiB flash).
++if(BOARD_DEF STREQUAL "BOARD_RP2350B" AND (PICO_BOARD STREQUAL "pico2" OR PICO_BOARD STREQUAL "pico2_w"))
++    if(DEBUG)
++        message(FATAL_ERROR
++            "BOARD_RP2350B with DEBUG=ON cannot use PICO_BOARD=${PICO_BOARD} "
++            "(declares PICO_RP2350A=1, breaking GP42 ADC assertions). "
++            "Use -DPICO_BOARD=waveshare_rp2350b_plus_w.")
++    elseif(NOT ALLOW_PICO2W_BOARD_HEADER)
++        message(FATAL_ERROR
++            "BOARD_RP2350B mismatches PICO_BOARD=${PICO_BOARD} (RP2350A, 4 MiB Flash). "
++            "Use -DPICO_BOARD=waveshare_rp2350b_plus_w (included in firmware/boards/) "
++            "for Waveshare RP2350B-Plus-W (RP2350B QFN-80, 16 MiB Flash), "
++            "or pass -DALLOW_PICO2W_BOARD_HEADER=ON only if you explicitly want the legacy header.")
++    endif()
++endif()
+ 
+ set(BOARD_DEFS ${BOARD_DEF})
+ if(DEBUG)
++    if(NOT ALLOW_UNSAFE_OVERCLOCK_1V5)
++        message(FATAL_ERROR
++            "REFUSED -DDEBUG=ON: firmware/pwmvid.c disables the RP2350 VREG limit and requests "
++            "1.50 V DVDD, exceeding the RP2350 datasheet absolute maximum of 1.21 V even with the "
++            "GPU disconnected. Use the stock 150 MHz build (-DDEBUG=OFF) for bench runs, or pass "
++            "-DALLOW_UNSAFE_OVERCLOCK_1V5=ON only if you explicitly accept silicon overvoltage risk.")
++    endif()
+     list(APPEND BOARD_DEFS DEBUG)
+-    message(STATUS "pico-ga100vfi: DEBUG build (400 MHz + NVVDD ADC)")
++    message(WARNING "pico-ga100vfi: DEBUG build ENABLED with 1.50 V DVDD (> 1.21 V RP2350 abs max)!")
+ else()
+-    message(STATUS "pico-ga100vfi: normal build (stock clocks, no ADC)")
++    message(STATUS "pico-ga100vfi: normal build (stock 150 MHz clocks, stock VREG, no ADC)")
+ endif()
+ 
+ add_executable(pwmvid pwmvid.c)
+diff --git a/firmware/boards/waveshare_rp2350b_plus_w.h b/firmware/boards/waveshare_rp2350b_plus_w.h
+new file mode 100644
+index 0000000..6e58536
+--- /dev/null
++++ b/firmware/boards/waveshare_rp2350b_plus_w.h
+@@ -0,0 +1,55 @@
++// Board header for Waveshare RP2350B-Plus-W (RP2350B QFN-80, 16 MiB Flash).
++// Used with: cmake -DPICO_BOARD=waveshare_rp2350b_plus_w -DBOARD_RP2350B=ON ..
++//
++// Ensures the Pico SDK declares RP2350B (PICO_RP2350A=0, 48 GPIOs, ADC on GP40-GP47)
++// and 16 MiB Flash instead of pico2_w's RP2350A (30 GPIOs, 4 MiB Flash).
++#ifndef _BOARDS_WAVESHARE_RP2350B_PLUS_W_H
++#define _BOARDS_WAVESHARE_RP2350B_PLUS_W_H
++
++pico_board_cmake_set(PICO_PLATFORM, rp2350)
++pico_board_cmake_set(PICO_FLASH_SIZE_BYTES, 16777216)
++
++// RP2350B QFN-80 package (48 GPIOs: GP0-GP47, ADC0-ADC7 on GP40-GP47)
++#ifndef PICO_RP2350A
++#define PICO_RP2350A 0
++#endif
++
++// 16 MiB QSPI flash (W25Q128JV)
++#ifndef PICO_FLASH_SIZE_BYTES
++#define PICO_FLASH_SIZE_BYTES (16 * 1024 * 1024)
++#endif
++
++// Standard UART0 / I2C0 / SPI0 defaults
++#ifndef PICO_DEFAULT_UART
++#define PICO_DEFAULT_UART 0
++#endif
++#ifndef PICO_DEFAULT_UART_TX_PIN
++#define PICO_DEFAULT_UART_TX_PIN 0
++#endif
++#ifndef PICO_DEFAULT_UART_RX_PIN
++#define PICO_DEFAULT_UART_RX_PIN 1
++#endif
++
++#ifndef PICO_DEFAULT_I2C
++#define PICO_DEFAULT_I2C 0
++#endif
++#ifndef PICO_DEFAULT_I2C_SDA_PIN
++#define PICO_DEFAULT_I2C_SDA_PIN 0
++#endif
++#ifndef PICO_DEFAULT_I2C_SCL_PIN
++#define PICO_DEFAULT_I2C_SCL_PIN 1
++#endif
++
++#ifndef PICO_XOSC_STARTUP_DELAY_MULTIPLIER
++#define PICO_XOSC_STARTUP_DELAY_MULTIPLIER 64
++#endif
++
++#ifndef PICO_BOOT_STAGE2_CHOOSE_W25Q080
++#define PICO_BOOT_STAGE2_CHOOSE_W25Q080 1
++#endif
++
++#ifndef PICO_FLASH_SPI_CLKDIV
++#define PICO_FLASH_SPI_CLKDIV 2
++#endif
++
++#endif // _BOARDS_WAVESHARE_RP2350B_PLUS_W_H
+diff --git a/firmware/pwmvid.c b/firmware/pwmvid.c
+index df69c99..670d6a9 100644
+--- a/firmware/pwmvid.c
++++ b/firmware/pwmvid.c
+@@ -194,6 +194,11 @@ static void pulse_low(uint pin, uint32_t ms) {
+     gpio_set_dir(pin, GPIO_IN);
+ }
+ 
++// Core-0 liveness timestamp read by Core 1 before feeding the hardware watchdog.
++static volatile uint32_t core0_alive_us;
++static inline void core0_touch(void) { core0_alive_us = time_us_32(); }
++#define CORE0_STALL_US 10000000u
++
+ // ------------------------------------------------------------------ GPU I2C
+ #define I2C_SDA   PIN_I2C_SDA
+ #define I2C_SCL   PIN_I2C_SCL
+@@ -269,12 +274,20 @@ static void i2c_cmd(char *line) {
+     uint8_t b[32];
+     int nb = 0;
+     char *p = line + 2, *end;
+-    while (nb < (int)sizeof b) {
++    bool parse_err = false;
++    while (true) {
++        while (*p == ' ' || *p == '\t') p++;
++        if (*p == '\0') break;
++        if (nb >= (int)sizeof b) { parse_err = true; break; }
+         unsigned long v = strtoul(p, &end, 16);
+-        if (end == p) break;
++        if (end == p || v > 0xFFul || (*end != '\0' && *end != ' ' && *end != '\t')) {
++            parse_err = true;
++            break;
++        }
+         b[nb++] = (uint8_t)v;
+         p = end;
+     }
++    if (parse_err) { printf("I2C ERR parse\n"); return; }
+ 
+     if (op == 's') {
+         printf("I2C scan:");
+@@ -348,7 +361,14 @@ static void unlock_config(void) {
+     bool rwp = pmbus_r(0x13, &wp, 1);
+     bool rcfg = pmbus_r(0x46, cfg, 2);
+     bool rcml = pmbus_r(0x7E, &cml, 1);
+-    printf("unlock %s wp=", !rcml ? "ERR" : (cml & 0x08) ? "MATCH" : "LOCKED");
++    bool all_ok = wok && rwp && rcfg && rcml
++                  && (cml & 0x08) && (wp == 0x00)
++                  && (cfg[1] == 0x12 && cfg[0] == 0x29);
++    const char *state = all_ok ? "MATCH"
++                      : (!rcml || !wok || !rwp || !rcfg) ? "ERR"
++                      : !(cml & 0x08) ? "LOCKED"
++                      : "ERR";
++    printf("unlock %s wp=", state);
+     if (rwp) printf("%02x", wp); else printf("ERR");
+     printf(" cfg=");
+     if (rcfg) printf("%02x%02x", cfg[1], cfg[0]); else printf("ERR");
+@@ -562,8 +582,10 @@ static void nvvdd_refresh(void) {
+ static void trace_dump(int n) {
+     if (n <= 0 || (uint32_t)n > trace_w) n = (int)trace_w;
+     printf("trace n=%d sample_ns=%.1f\n", n, sample_ns);
+-    for (int i = 0; i < n; i++)
++    for (int i = 0; i < n; i++) {
++        if ((i & 0x3FF) == 0) core0_alive_us = time_us_32();
+         printf("%04x%s", trace[i], (i % 16 == 15) ? "\n" : " ");
++    }
+     printf("\n");
+ }
+ 
+@@ -643,11 +665,29 @@ static bool pmbus_w16_retry(uint8_t reg, uint16_t v, uint32_t budget_us) {
+ static int mv_to_code(int mv) { return (int)(mv / VID_LSB_MV + 0.5f); }
+ 
+ static void glitch_cmd(char *line) {
+-    int vd = 325, td = -100, vr = 650, tr = -20, tv = 0, fast = 1, hold_ms = 0;
+-    int pulses = 1, pw = 0, gap = 0, delay = 75, revert = 1;
+-    sscanf(line + 1, "%d %d %d %d %d %d %d %d %d %d %d %d",
+-           &vd, &td, &vr, &tr, &tv, &fast, &hold_ms, &pulses, &pw, &gap, &delay, &revert);
++    int vd = 0, td = 0, vr = 0, tr = 0, tv = 0, fast = 0, hold_ms = 0;
++    int pulses = 0, pw = 0, gap = 0, delay = 0, revert = 0;
++    int consumed = 0;
++    int matched = sscanf(line + 1, "%d %d %d %d %d %d %d %d %d %d %d %d%n",
++                         &vd, &td, &vr, &tr, &tv, &fast, &hold_ms, &pulses, &pw, &gap, &delay, &revert,
++                         &consumed);
++    if (matched != 12) {
++        printf("glitch ABORT: expected 12 integer args, got %d\n", matched < 0 ? 0 : matched);
++        return;
++    }
++    const char *tail = line + 1 + consumed;
++    while (*tail == ' ' || *tail == '\t') tail++;
++    if (*tail != '\0') {
++        printf("glitch ABORT: unexpected trailing tokens in g command\n");
++        return;
++    }
++    if (vd < 200 || vd > 900) { printf("glitch ABORT: vd=%d mV out of range 200..900\n", vd); return; }
++    if (vr < 400 || vr > 950) { printf("glitch ABORT: vr=%d mV out of range 400..950\n", vr); return; }
+     if (fast < 0 || fast > 7) { printf("glitch ABORT: fast=%d, use 0..7\n", fast); return; }
++    if (hold_ms < 0 || hold_ms > 5000) { printf("glitch ABORT: hold_ms=%d out of range 0..5000\n", hold_ms); return; }
++    if (pulses < 1 || pulses > 16) { printf("glitch ABORT: pulses=%d out of range 1..16\n", pulses); return; }
++    if (delay < 0 || delay > 500) { printf("glitch ABORT: delay=%d out of range 0..500\n", delay); return; }
++    if (revert < 0 || revert > 2) { printf("glitch ABORT: revert=%d out of range 0..2\n", revert); return; }
+     // revert=2: one-VID dither (see the pulse train below); no hand-back.
+     bool dither = revert == 2;
+     if (dither) revert = 0;
+@@ -660,8 +700,6 @@ static void glitch_cmd(char *line) {
+         reset_at = tr;
+         tr = -20;
+     }
+-    if (pulses < 1) pulses = 1;
+-    if (pulses > 16) pulses = 16;
+     if (pw <= 0) pw = (pulses == 1) ? (tr - td) : (tr - td) / (2 * pulses - 1);
+     if (gap <= 0) gap = pw;
+     // A 16-bit PMBus write is ~36 us at 1 MHz; keep steps from colliding.
+@@ -794,7 +832,10 @@ static void glitch_cmd(char *line) {
+     int wfail = 0, executed = 0, failed = -1;
+     for (int i = 0; i < ns; i++) {
+         int64_t want = (int64_t)(t0 + (uint64_t)(int64_t)st[i].t_us);
+-        while ((int64_t)time_us_64() < want) tight_loop_contents();
++        while ((int64_t)time_us_64() < want) {
++            core0_touch();
++            tight_loop_contents();
++        }
+         shot_timing[i].start_us = (int64_t)time_us_64() - (int64_t)t0;
+         bool ok = true;
+         switch (st[i].act) {
+@@ -868,8 +909,9 @@ static void glitch_cmd(char *line) {
+     if (rail_down)
+         for (unsigned i = 0; i < sizeof regs; i++) sok[i] = pmbus_r(regs[i], &sb[i], 1);
+     uint8_t cml = 0, e1[2] = { 0, 0 };
+-    pmbus_r(0x7E, &cml, 1);
+-    pmbus_r(0xE1, e1, 2);
++    bool ok_cml = pmbus_r(0x7E, &cml, 1);
++    bool ok_e1 = pmbus_r(0xE1, e1, 2);
++    if (!ok_cml || !ok_e1) wfail++;
+     i2c_quiet = false;
+ 
+     // Report. pw and gap are the resolved values (after auto-size and floors).
+@@ -901,6 +943,9 @@ static void glitch_cmd(char *line) {
+                (int)safe_vout, (int)safe_vmin);
+     if (!prof_ok)
+         printf("glitch FAIL: VRM profile restore or readback failed; power-cycle the card\n");
++    if (!ok_cml || !ok_e1)
++        printf("glitch FAIL: post-shot PMBus status read failed (cml_ok=%d e1_ok=%d)\n",
++               (int)ok_cml, (int)ok_e1);
+     if (rail_down) {
+         if (vok) printf("rail_code=%u status", rail_code);
+         else printf("rail_code=ERR status");
+@@ -929,11 +974,17 @@ static void glitch_cmd(char *line) {
+ 
+ // Restore the stock control path (recovery / hand-back).
+ static void revert_cmd(void) {
+-    (void)pmbus_w16(0x1F, 0x30);
++    bool vmin_ok = pmbus_w16(0x1F, 0x30);
+     bool b = pmbus_w16(0x21, 0x7E);
+-    sleep_ms(500);
++    for (int i = 0; i < 10; i++) {
++        core0_touch();
++        sleep_ms(50);
++    }
+     bool a = pmbus_w16(0xE1, 0xC2EA);
+-    printf("revert vout=%d mode=%d (PWM-VID restored)\n", b, a);
++    if (vmin_ok && b && a)
++        printf("revert vmin=%d vout=%d mode=%d (PWM-VID restored)\n", vmin_ok, b, a);
++    else
++        printf("revert FAIL vmin=%d vout=%d mode=%d\n", vmin_ok, b, a);
+ }
+ 
+ // ------------------------------------------------------ watchdog / faults
+@@ -980,13 +1031,13 @@ static void reset_reason(void) {
+     watchdog_hw->scratch[0] = 0;
+ }
+ 
+-// Core 1: feed the watchdog (the ADC trace is DMA-driven on core 0). It busy
+-// waits: sleep_us() adds an alarm to the default pool every 500 us, and that
+-// pool's IRQ runs on core 0 under spin locks with interrupts masked, which can
+-// delay the release alarm (SDK pico_time sleep_until).
++// Core 1: feed the watchdog ONLY while Core 0 is alive (heartbeating core0_alive_us).
++// If Core 0 stalls for > CORE0_STALL_US, Core 1 stops feeding WDT so the RP2350 resets.
+ static void core1_main(void) {
+     while (true) {
+-        watchdog_update();
++        if ((uint32_t)(time_us_32() - core0_alive_us) < CORE0_STALL_US) {
++            watchdog_update();
++        }
+         PHASE(1);
+         busy_wait_us(500);
+     }
+@@ -999,12 +1050,16 @@ int main(void) {
+     reset_reason();
+     clock_init();
+     adc_init_capture();
++    core0_touch();
+     multicore_launch_core1(core1_main);
+     watchdog_enable(WDT_MS, true);
+ 
+     stdio_init_all();
+     i2c_pins_float();
+-    sleep_ms(1500);
++    for (int i = 0; i < 30; i++) {
++        core0_touch();
++        sleep_ms(50);
++    }
+     printf("\npwmvid: %u MHz, wiring: I2C + PEX_RST [lab: card profile save/restore]",
+            clock_get_hz(clk_sys) / 1000000);
+ #ifdef DEBUG
+@@ -1022,20 +1077,29 @@ int main(void) {
+ 
+     char line[96];
+     int ll = -1;
++    bool line_overflow = false;
+     while (true) {
++        core0_touch();
+         int c = getchar_timeout_us(1000);
+         if (c == PICO_ERROR_TIMEOUT) continue;
+         if (ll >= 0) {
+             if (c == '\n' || c == '\r') {
+-                line[ll] = 0;
+-                if (line[0] == '@') i2c_cmd(line);
+-                else if (line[0] == 'g') glitch_cmd(line);
++                if (line_overflow) {
++                    printf("ERR: line too long (rejected)\n");
++                } else {
++                    line[ll] = 0;
++                    if (line[0] == '@') i2c_cmd(line);
++                    else if (line[0] == 'g') glitch_cmd(line);
++                }
+                 ll = -1;
++                line_overflow = false;
+             } else if (ll < (int)sizeof line - 1) {
+                 line[ll++] = (char)c;
++            } else {
++                line_overflow = true;
+             }
+         }
+-        else if (c == '@' || c == 'g') { line[0] = (char)c; ll = 1; }
++        else if (c == '@' || c == 'g') { line[0] = (char)c; ll = 1; line_overflow = false; }
+         else if (c == 'v') {
+ #ifdef DEBUG
+             nvvdd_refresh();
+diff --git a/host/ga100vfi/bar0.py b/host/ga100vfi/bar0.py
+index 9bdac7b..4cd971c 100644
+--- a/host/ga100vfi/bar0.py
++++ b/host/ga100vfi/bar0.py
+@@ -9,6 +9,42 @@ import time
+ DEFAULT_BDF = "0000:1a:00.0"
+ DEFAULT_SIZE = 16 << 20  # 16 MiB, the GA100 BAR0 window
+ 
++NVIDIA_VENDOR_ID = 0x10DE
++ALLOWED_GA100_DEVICES = {
++    0x20C2,  # CMP 170HX 8GB
++    0x2082,  # CMP 170HX 10GB
++    0x20B5,  # A100 PCIe 80GB
++    0x20B0,  # A100 SXM4 40GB
++    0x20B2,  # A100 SXM4 80GB
++    0x20F1,  # A100 PCIe 40GB
++}
++FORBIDDEN_DRIVERS = {"nvidia", "nouveau"}
++
++
++def verify_ga100_pci(bdf: str, refuse_gpu_driver: bool = True) -> tuple[int, int]:
++    """Verify sysfs BDF is an NVIDIA GA100 GPU and not bound to nvidia/nouveau."""
++    dev_dir = f"/sys/bus/pci/devices/{bdf}"
++    try:
++        with open(f"{dev_dir}/vendor", encoding="ascii") as f:
++            vendor = int(f.read().strip(), 16)
++        with open(f"{dev_dir}/device", encoding="ascii") as f:
++            device = int(f.read().strip(), 16)
++    except FileNotFoundError as e:
++        raise FileNotFoundError(f"PCI device {bdf} not found ({dev_dir})") from e
++    if vendor != NVIDIA_VENDOR_ID or device not in ALLOWED_GA100_DEVICES:
++        raise RuntimeError(
++            f"refused PCI device {bdf}: {vendor:04x}:{device:04x} is not a supported GA100 GPU"
++        )
++    if refuse_gpu_driver:
++        drv_link = f"{dev_dir}/driver"
++        if os.path.islink(drv_link):
++            drv = os.path.basename(os.readlink(drv_link))
++            if drv in FORBIDDEN_DRIVERS:
++                raise RuntimeError(
++                    f"refused PCI device {bdf}: driver '{drv}' is bound (unload before BAR0/config access)"
++                )
++    return vendor, device
++
+ 
+ def _resource0_start(bdf: str) -> int:
+     path = f"/sys/bus/pci/devices/{bdf}/resource"
+@@ -21,11 +57,13 @@ def _resource0_start(bdf: str) -> int:
+ 
+ def restore(bdf: str = DEFAULT_BDF, wait_s: float = 0.25,
+             settle_s: float = 0.15) -> bool:
+-    """Wait for PCIe link after PEX_RST, reprogram BAR0, and enable mem decode.
++    """Wait for PCIe link after PEX_RST, verify GA100 ID, reprogram BAR0, and enable mem decode.
+ 
+     Returns False if the GPU never came back on PCIe config space within wait_s
+     (normal on a failed glitch shot; caller should issue the next reset).
++    Raises RuntimeError if BDF is not a supported GA100 GPU or is bound to nvidia/nouveau.
+     """
++    expected_vendor, expected_device = verify_ga100_pci(bdf, refuse_gpu_driver=True)
+     if settle_s > 0:
+         time.sleep(min(settle_s, wait_s))
+     start = _resource0_start(bdf)
+@@ -45,43 +83,84 @@ def restore(bdf: str = DEFAULT_BDF, wait_s: float = 0.25,
+             if time.monotonic() >= deadline:
+                 return False
+             time.sleep(0.02)
++        live_vendor = vd & 0xFFFF
++        live_device = (vd >> 16) & 0xFFFF
++        if live_vendor != expected_vendor or live_device not in ALLOWED_GA100_DEVICES:
++            raise RuntimeError(
++                f"refused config restore on {bdf}: live ID {live_vendor:04x}:{live_device:04x} "
++                f"does not match GA100 ({expected_vendor:04x}:{expected_device:04x})"
++            )
+         bar0 = struct.unpack("<I", os.pread(fd, 4, 0x10))[0]
+         if (bar0 & 0xFFFFFFF0) != (start & 0xFFFFFFF0):
+             os.pwrite(fd, struct.pack("<I", start & 0xFFFFFFFF), 0x10)
+         cmd = struct.unpack("<H", os.pread(fd, 2, 0x04))[0]
+         if (cmd & 0x0002) == 0:
+             os.pwrite(fd, struct.pack("<H", cmd | 0x0002), 0x04)
+-        return struct.unpack("<I", os.pread(fd, 4, 0x00))[0] != 0xFFFFFFFF
++        vd_after = struct.unpack("<I", os.pread(fd, 4, 0x00))[0]
++        return (vd_after & 0xFFFF) == expected_vendor and ((vd_after >> 16) & 0xFFFF) in ALLOWED_GA100_DEVICES
+     finally:
+         os.close(fd)
+ 
++
+ class Bar0:
+-    """mmap of /sys/bus/pci/devices/<bdf>/resource0."""
++    """mmap of /sys/bus/pci/devices/<bdf>/resource0 with alignment, bounds, and PCI ID guards."""
+ 
+-    def __init__(self, bdf: str = DEFAULT_BDF, size: int = DEFAULT_SIZE):
++    def __init__(self, bdf: str = DEFAULT_BDF, size: int = DEFAULT_SIZE,
++                 read_only: bool = False, mm=None, verify_pci: bool = True):
+         self.bdf = bdf
++        self.size = size
++        self.read_only = bool(read_only)
++        self._owns_mm = mm is None
++        self.fd: int | None = None
++        if mm is not None:
++            self.mm = mm
++            self.size = len(mm)
++            return
++        if verify_pci:
++            verify_ga100_pci(bdf, refuse_gpu_driver=True)
+         self.path = f"/sys/bus/pci/devices/{bdf}/resource0"
+-        self.fd = os.open(self.path, os.O_RDWR | os.O_SYNC)
++        flags = os.O_RDONLY if self.read_only else (os.O_RDWR | os.O_SYNC)
++        prot = mmap.PROT_READ if self.read_only else (mmap.PROT_READ | mmap.PROT_WRITE)
++        self.fd = os.open(self.path, flags)
+         try:
+-            self.mm = mmap.mmap(self.fd, size, mmap.MAP_SHARED,
+-                                mmap.PROT_READ | mmap.PROT_WRITE)
++            self.mm = mmap.mmap(self.fd, size, mmap.MAP_SHARED, prot)
+         except Exception:
+             os.close(self.fd)
++            self.fd = None
+             raise
+ 
++    def _check_off(self, off: int) -> None:
++        if not isinstance(off, int) or isinstance(off, bool) or (off & 3) or off < 0 or off + 4 > self.size:
++            raise ValueError(f"invalid/unaligned BAR0 offset 0x{off:X} (size=0x{self.size:X})")
++
+     def rd32(self, off: int) -> int:
+-        return struct.unpack_from("<I", self.mm, off)[0]
++        self._check_off(off)
++        mv = memoryview(self.mm)[off:off + 4].cast("I")
++        try:
++            return int(mv[0])
++        finally:
++            mv.release()
+ 
+     def wr32(self, off: int, value: int) -> None:
++        if self.read_only:
++            raise PermissionError(f"refused BAR0 write to 0x{off:06X} on read-only mapping")
++        self._check_off(off)
++        if not isinstance(value, int) or isinstance(value, bool) or value < 0 or value > 0xFFFFFFFF:
++            raise ValueError(f"32-bit BAR0 write value out of range: {value!r}")
+         # One aligned 32-bit store. struct.pack_into zeroes its destination
+         # before packing, which on this mmap is a write of 0 to the register.
+         mv = memoryview(self.mm)[off:off + 4].cast("I")
+-        mv[0] = value & 0xFFFFFFFF
+-        mv.release()
++        try:
++            mv[0] = value
++        finally:
++            mv.release()
+ 
+     def close(self) -> None:
+-        self.mm.close()
+-        os.close(self.fd)
++        if self._owns_mm and self.mm is not None:
++            self.mm.close()
++        if self.fd is not None:
++            os.close(self.fd)
++            self.fd = None
+ 
+     def __enter__(self) -> "Bar0":
+         return self
+diff --git a/host/ga100vfi/classify.py b/host/ga100vfi/classify.py
+index 726dee4..0de0ffe 100644
+--- a/host/ga100vfi/classify.py
++++ b/host/ga100vfi/classify.py
+@@ -2,17 +2,15 @@
+ 
+ 1. glitch (issued elsewhere)
+ 2. sleep 200 ms
+-3. read DSOV (0x00820084); continue unless it reads 0
+-4. read an FPF row (0x00824314); continue if it reads 0xffffffff
+-5. write DSOV = 1 (0x00820040), read back; continue unless it reads 1
++3. read FUSECTRL first — abort immediately on PRI poison, 0xFFFFFFFF, or non-IDLE
++4. read DSOV (0x00820084); continue unless it reads 0
++5. read an FPF row (0x00824314); continue if it reads 0xffffffff
++6. write DSOV = 1 (0x00820040), read back; continue unless it reads 1
+    (0x00820040 is EN_SW_OVERRIDE and keeps its value across PEX_RST; the write
+    is opt-in, see classify())
+-6. dump the shadow fuse registers and compare with the baseline (logged only)
+-7. read NV_FUSE_OPT_PRIV_LEVEL_MASK (0x008200fc); Goldilocks reads 0xffffffff
+-   (both PLMs wide open, so the shadow option words are writable)
+-8. read NV_FUSE_CRC_STATUS (0x00820070); continue unless it reads 0x55 (both
+-   fuse hash regions H0/H1 parsed cleanly). 0x00 == block not CRC-validated,
+-   a "problematic" Goldilocks that otherwise looks correct.
++7. dump the shadow fuse registers and compare with the baseline (logged only)
++8. read NV_FUSE_OPT_PRIV_LEVEL_MASK (0x008200fc); Goldilocks reads 0xffffffff
++9. read NV_FUSE_CRC_STATUS (0x00820070); continue unless it reads 0x55
+ """
+ from __future__ import annotations
+ 
+@@ -26,6 +24,10 @@ PRIV_MASK = 0x008200fc
+ CRC_STATUS = 0x00820070
+ CRC_GOOD = 0x55
+ 
++FUSECTRL = 0x00820000
++FUSECTRL_STATE_MASK = 0x1F << 16
++FUSECTRL_STATE_IDLE = 4 << 16
++
+ # Shadow registers that move when the fuse block is misread.
+ SHADOW = {
+     "STATUS_OPT_GPC": 0x00820C1C,
+@@ -50,6 +52,9 @@ class Verdict:
+     # False when classify() did not write 0x00820040: dsov_writeback is then only
+     # a read of that register and check 5 is left out of `checks`.
+     dsov_written: bool = True
++    # Non-None whenever FUSECTRL or any checked register returned poison, dead bus,
++    # or non-IDLE controller state. Guarantees passed == False.
++    fault: str | None = None
+ 
+     @property
+     def checks(self) -> dict[str, bool]:
+@@ -66,11 +71,12 @@ class Verdict:
+ 
+     @property
+     def passed(self) -> bool:
+-        return all(self.checks.values())
++        return self.fault is None and all(self.checks.values())
+ 
+     def as_dict(self) -> dict:
+         return {
+             "passed": self.passed,
++            "fault": self.fault,
+             "checks": self.checks,
+             "dsov": self.dsov,
+             "fpf_row": self.fpf_row,
+@@ -83,48 +89,99 @@ class Verdict:
+         }
+ 
+ 
+-def snapshot(bar) -> dict[str, int]:
+-    return {name: bar.rd32(off) for name, off in SHADOW.items()}
++def _poisoned(value: int) -> bool:
++    """True for any NVIDIA PRI error sentinel 0xBAD0xxxx..0xBADFxxxx."""
++    return ((value >> 20) & 0xFFF) == 0xBAD
+ 
+ 
+-FUSECTRL = 0x00820000
++def _ctrl_idle(ctrl: int) -> bool:
++    """True only for healthy, idle FUSECTRL (not poisoned, not 0xFFFFFFFF, STATE==IDLE, CMD==0)."""
++    return (
++        not _poisoned(ctrl)
++        and ctrl != UNREADABLE
++        and (ctrl & FUSECTRL_STATE_MASK) == FUSECTRL_STATE_IDLE
++        and (ctrl & 0xF) == 0
++    )
+ 
+ 
+-def _poisoned(value: int) -> bool:
+-    """True for any NVIDIA PRI error sentinel 0xBAD0xxxx..0xBADFxxxx."""
+-    return ((value >> 20) & 0xFFF) == 0xBAD
++def snapshot(bar, fail_fast: bool = False) -> dict[str, int]:
++    """Read SHADOW registers. If fail_fast=True, stops on first poison or 0xFFFFFFFF."""
++    out: dict[str, int] = {}
++    for name, off in SHADOW.items():
++        val = bar.rd32(off)
++        out[name] = val
++        if fail_fast and (_poisoned(val) or val == UNREADABLE):
++            break
++    return out
+ 
+ 
+ def classify(bar, baseline: dict[str, int] | None = None, write: bool | None = None) -> Verdict:
+-    """Run checks 3-8.
+-
+-    Read FUSECTRL first. A disturbed fuse read can leave the controller at 0xBADFxxxx; more BAR0 reads
+-    on such a card are a host-hang risk. Poisoned -> read nothing else, report an over-glitched shot
+-    (priv_mask 0 marks it). The same holds when DSOV itself reads 0xBADFxxxx behind a healthy FUSECTRL:
+-    the verdict carries that DSOV value and nothing after it is read or written. On the cards tested a
+-    poisoned controller stayed poisoned until a power cycle, so later shots of the same boot read
+-    poisoned too.
+-
+-    Check 5 writes 1 to 0x00820040 (EN_SW_OVERRIDE). That register keeps its value across PEX_RST, so
+-    after one such write every later shot of the boot runs with the software override on. The write
+-    happens only with write=True, or with CLASSIFY_WRITE=1 in the environment when write is None.
+-    Without it 0x00820040 is only read, and check 5 is left out of Verdict.checks."""
++    """Run fail-fast fuse-controller health gate and checks 3-8.
++
++    Read FUSECTRL first. A poisoned (0xBADxxxxx), dead (0xFFFFFFFF), or non-IDLE
++    FUSECTRL aborts immediately after 1 read with passed=False and ZERO further
++    BAR0 reads or writes. Subsequent registers also abort immediately on PRI
++    poison or dead 0xFFFFFFFF (except PRIV_MASK, where 0xFFFFFFFF means open PLM,
++    and FPF_ROW, where 0xFFFFFFFF simply fails fpf_readable without aborting
++    unless poisoned).
++    """
+     if write is None:
+         write = os.environ.get("CLASSIFY_WRITE") == "1"
++
+     ctrl = bar.rd32(FUSECTRL)
+     if _poisoned(ctrl):
+-        return Verdict(0, UNREADABLE, 0, 0, 0, {"FUSECTRL_POISONED": ctrl}, {})
++        return Verdict(0, UNREADABLE, 0, 0, 0, {"FUSECTRL_POISONED": ctrl}, {}, write,
++                       fault="FUSECTRL_POISONED")
++    if ctrl == UNREADABLE:
++        return Verdict(0, UNREADABLE, 0, 0, 0, {"FUSECTRL_DEAD": ctrl}, {}, write,
++                       fault="FUSECTRL_DEAD")
++    if not _ctrl_idle(ctrl):
++        return Verdict(0, UNREADABLE, 0, 0, 0, {"FUSECTRL_NOT_IDLE": ctrl}, {}, write,
++                       fault="FUSECTRL_NOT_IDLE")
++
+     dsov = bar.rd32(DSOV)
+     if _poisoned(dsov):
+-        return Verdict(dsov, UNREADABLE, 0, 0, 0, {"DSOV_POISONED": dsov}, {})
++        return Verdict(dsov, UNREADABLE, 0, 0, 0, {"DSOV_POISONED": dsov}, {}, write,
++                       fault="DSOV_POISONED")
++    if dsov == UNREADABLE:
++        return Verdict(dsov, UNREADABLE, 0, 0, 0, {"DSOV_DEAD": dsov}, {}, write,
++                       fault="DSOV_DEAD")
++
+     fpf = bar.rd32(FPF_ROW)
++    if _poisoned(fpf):
++        return Verdict(dsov, fpf, 0, 0, 0, {"FPF_POISONED": fpf}, {}, write,
++                       fault="FPF_POISONED")
++
+     if write:
+         bar.wr32(DSOV_SET, 1)
+     writeback = bar.rd32(DSOV_SET)
++    if _poisoned(writeback) or writeback == UNREADABLE:
++        tag = "DSOV_SET_POISONED" if _poisoned(writeback) else "DSOV_SET_DEAD"
++        return Verdict(dsov, fpf, writeback, 0, 0, {tag: writeback}, {}, write, fault=tag)
++
+     priv = bar.rd32(PRIV_MASK)
++    if _poisoned(priv):
++        return Verdict(dsov, fpf, writeback, priv, 0, {"PRIV_MASK_POISONED": priv}, {}, write,
++                       fault="PRIV_MASK_POISONED")
++
+     crc = bar.rd32(CRC_STATUS)
+-    shadow = snapshot(bar)
++    if _poisoned(crc) or crc == UNREADABLE:
++        tag = "CRC_POISONED" if _poisoned(crc) else "CRC_DEAD"
++        return Verdict(dsov, fpf, writeback, priv, crc, {tag: crc}, {}, write, fault=tag)
++
++    shadow: dict[str, int] = {}
++    fault: str | None = None
++    for name, off in SHADOW.items():
++        val = bar.rd32(off)
++        shadow[name] = val
++        if _poisoned(val):
++            fault = f"SHADOW_POISONED:{name}"
++            break
++        if val == UNREADABLE:
++            fault = f"SHADOW_DEAD:{name}"
++            break
++
+     diff = {}
+-    if baseline:
++    if baseline and fault is None:
+         diff = {k: (baseline.get(k), v) for k, v in shadow.items() if baseline.get(k) != v}
+-    return Verdict(dsov, fpf, writeback, priv, crc, shadow, diff, write)
++    return Verdict(dsov, fpf, writeback, priv, crc, shadow, diff, write, fault=fault)
+diff --git a/host/ga100vfi/cli.py b/host/ga100vfi/cli.py
+index 13ac4c6..18e190c 100644
+--- a/host/ga100vfi/cli.py
++++ b/host/ga100vfi/cli.py
+@@ -10,7 +10,7 @@ from datetime import datetime
+ 
+ from .adaptive import Planner
+ from .bar0 import DEFAULT_BDF, Bar0, brd_serial, restore
+-from .classify import classify, snapshot
++from .classify import FUSECTRL, UNREADABLE, _ctrl_idle, _poisoned, classify, snapshot
+ from .glitch import Attempt, Card
+ 
+ 
+@@ -25,11 +25,19 @@ def cmd_classify(args) -> int:
+ 
+ 
+ def cmd_baseline(args) -> int:
+-    if not restore(args.bdf, wait_s=0.5, settle_s=0.0):
+-        print(f"{args.bdf}: GPU config space unreachable (0xffffffff)", file=sys.stderr)
+-        return 2
+-    with Bar0(args.bdf) as bar:
+-        print(json.dumps(snapshot(bar), indent=2))
++    """Read-only shadow snapshot: never writes PCI config space and gates on FUSECTRL first."""
++    with Bar0(args.bdf, read_only=True) as bar:
++        ctrl = bar.rd32(FUSECTRL)
++        if not _ctrl_idle(ctrl):
++            print(f"{args.bdf}: refused baseline: FUSECTRL=0x{ctrl:08x} (not IDLE / dead / poisoned)",
++                  file=sys.stderr)
++            return 2
++        snap = snapshot(bar, fail_fast=True)
++        for name, val in snap.items():
++            if _poisoned(val) or val == UNREADABLE:
++                print(f"{args.bdf}: baseline aborted on {name}=0x{val:08x}", file=sys.stderr)
++                return 2
++    print(json.dumps(snap, indent=2))
+     return 0
+ 
+ 
+@@ -47,6 +55,8 @@ def cmd_attempt(args) -> int:
+               f"writes_failed={rep.writes_failed}")
+         if args.trace:
+             print(card.trace())
++        if rep.writes_failed > 0 or "glitch FAIL" in rep.raw:
++            return 1
+     return 0
+ 
+ 
+@@ -60,7 +70,10 @@ def _classify_attempt(v) -> str:
+ 
+     under: dsov=1 (dip too shallow). over: dsov=0 but crc != 0x55 (too deep).
+     hit: dsov=0 and crc=0x55 (in the window). goldilocks: all checks pass.
++    lost: controller dead/not-idle/poisoned/faulted.
+     """
++    if v.fault is not None:
++        return "lost"
+     if v.passed:
+         return "goldilocks"
+     if v.dsov == 1:
+@@ -118,9 +131,8 @@ def cmd_campaign(args) -> int:
+                 outcome = "lost"
+                 if restore(args.bdf, wait_s=args.restore_wait):
+                     with Bar0(args.bdf) as bar:
+-                        if bar.rd32(0x00820000) != 0xFFFFFFFF:  # FUSECTRL, not PMC_BOOT_0 (poison-safe)
+-                            v = classify(bar)
+-                            outcome = _classify_attempt(v)
++                        v = classify(bar)
++                        outcome = _classify_attempt(v)
+                 if outcome == "lost":
+                     lost += 1
+                 else:
+diff --git a/host/ga100vfi/glitch.py b/host/ga100vfi/glitch.py
+index ffccf4a..50d266b 100644
+--- a/host/ga100vfi/glitch.py
++++ b/host/ga100vfi/glitch.py
+@@ -90,7 +90,13 @@ class Card:
+     # --- card commands ---------------------------------------------------
+     def unlock(self) -> bool:
+         r = self.cmd("u")
+-        return "MATCH" in r
++        if "ERR" in r or "LOCKED" in r:
++            return False
++        lines = [ln.strip() for ln in r.splitlines() if ln.strip()]
++        return bool(lines) and any(
++            ln.startswith("unlock MATCH") and "wp=00" in ln and "cfg=1229" in ln
++            for ln in lines
++        )
+ 
+     def lock_status(self) -> tuple[bool, int]:
+         r = self.cmd("z")
+@@ -101,17 +107,25 @@ class Card:
+ 
+     def attempt(self, a: Attempt) -> Report:
+         r = self.cmd(a.command(), wait=0.8, total=20.0, until="glitch done")
++        if "glitch ABORT" in r or "ERR:" in r:
++            raise IOError(r)
+         m = re.search(
+             r"glitch done pwd=(\d) e1=0x([0-9a-f]{4})"
+             r"(?: nvvdd=(-?[\d.]+))? writes_failed=(\d+)", r)
+         if not m:
+             raise IOError(r)
++        wf = int(m.group(4))
++        if "glitch FAIL" in r and wf == 0:
++            wf = 1
+         return Report(bool(int(m.group(1))), int(m.group(2), 16),
+                       float(m.group(3)) if m.group(3) else None,
+-                      int(m.group(4)), r)
++                      wf, r)
+ 
+     def revert(self) -> str:
+-        return self.cmd("w", wait=0.8, total=2.0, until="revert")
++        r = self.cmd("w", wait=0.8, total=2.0, until="revert")
++        if "revert FAIL" in r or "ERR" in r or "PWM-VID restored" not in r:
++            raise IOError(f"revert failed or unconfirmed: {r!r}")
++        return r
+ 
+     def status(self) -> str:
+         return self.cmd("v")
+diff --git a/host/test_classify.py b/host/test_classify.py
+index 7ebc035..6dec9eb 100644
+--- a/host/test_classify.py
++++ b/host/test_classify.py
+@@ -1,19 +1,42 @@
+-"""Offline tests for classify(): a fake BAR0 that logs every access. Run from host/:
++"""Offline tests for classify(), Bar0 guards, and Card protocol parsing. Run from host/:
+ python3 -m unittest test_classify"""
+ import os
+ import unittest
+ 
+-from ga100vfi.classify import (CRC_STATUS, DSOV, DSOV_SET, FPF_ROW, FUSECTRL, PRIV_MASK, SHADOW,
+-                               UNREADABLE, classify)
+-
+-HEALTHY = {FUSECTRL: 0xE0040000, DSOV: 1, FPF_ROW: 0x00000000, DSOV_SET: 0, PRIV_MASK: 0xFFFFFFFF,
+-           CRC_STATUS: 0x55}
++from ga100vfi.bar0 import Bar0
++from ga100vfi.classify import (
++    CRC_STATUS,
++    DSOV,
++    DSOV_SET,
++    FPF_ROW,
++    FUSECTRL,
++    PRIV_MASK,
++    SHADOW,
++    UNREADABLE,
++    classify,
++)
++from ga100vfi.glitch import Attempt, Card
++
++HEALTHY = {
++    FUSECTRL: 0xE0040000,
++    DSOV: 1,
++    FPF_ROW: 0x00000000,
++    DSOV_SET: 0,
++    PRIV_MASK: 0xFFFFFFFF,
++    CRC_STATUS: 0x55,
++}
+ 
+ 
+ class FakeBar:
+     def __init__(self, **over):
+         self.regs = dict(HEALTHY)
+-        self.regs.update({globals()[k]: v for k, v in over.items()})
++        for k, v in over.items():
++            if k in globals():
++                self.regs[globals()[k]] = v
++            elif k in SHADOW:
++                self.regs[SHADOW[k]] = v
++            else:
++                raise KeyError(k)
+         self.log = []
+ 
+     def rd32(self, off):
+@@ -98,18 +121,36 @@ class ClassifyTest(unittest.TestCase):
+         self.assertEqual(bar.log, [("rd", FUSECTRL)])
+         self.assertEqual((v.dsov, v.priv_mask, v.crc_status, v.fpf_row), (0, 0, 0, UNREADABLE))
+         self.assertEqual(v.shadow, {"FUSECTRL_POISONED": 0xBADF5040})
++        self.assertEqual(v.fault, "FUSECTRL_POISONED")
+         self.assertFalse(v.passed)
+ 
+-    def test_poisoned_dsov_stops_before_any_write(self):
++    def test_dead_or_non_idle_fusectrl_stops_after_one_read_and_never_passes(self):
++        os.environ["CLASSIFY_WRITE"] = "1"
++        for bad_ctrl, expected_fault in (
++            (0xFFFFFFFF, "FUSECTRL_DEAD"),
++            (0xE0010001, "FUSECTRL_NOT_IDLE"),
++            (0xE0040001, "FUSECTRL_NOT_IDLE"),
++            (0x00000000, "FUSECTRL_NOT_IDLE"),
++        ):
++            with self.subTest(ctrl=hex(bad_ctrl)):
++                bar = FakeBar(FUSECTRL=bad_ctrl, DSOV=0)
++                v = classify(bar)
++                self.assertEqual(bar.log, [("rd", FUSECTRL)])
++                self.assertEqual(v.fault, expected_fault)
++                self.assertFalse(v.passed)
++
++    def test_poisoned_or_dead_dsov_stops_before_any_write(self):
+         os.environ["CLASSIFY_WRITE"] = "1"
+-        for bad_dsov in (0xBADF1701, 0xBAD00100):
++        for bad_dsov, key in ((0xBADF1701, "DSOV_POISONED"), (0xBAD00100, "DSOV_POISONED"),
++                              (0xFFFFFFFF, "DSOV_DEAD")):
+             with self.subTest(dsov=hex(bad_dsov)):
+                 bar = FakeBar(DSOV=bad_dsov)
+                 v = classify(bar)
+                 self.assertEqual(bar.log, [("rd", FUSECTRL), ("rd", DSOV)])
+                 self.assertEqual(v.dsov, bad_dsov)
+                 self.assertEqual((v.priv_mask, v.crc_status, v.fpf_row), (0, 0, UNREADABLE))
+-                self.assertEqual(v.shadow, {"DSOV_POISONED": bad_dsov})
++                self.assertEqual(v.shadow, {key: bad_dsov})
++                self.assertEqual(v.fault, key)
+                 self.assertFalse(v.passed)
+ 
+     def test_poisoned_bad0_fusectrl_reads_nothing_else(self):
+@@ -120,6 +161,22 @@ class ClassifyTest(unittest.TestCase):
+         self.assertEqual(v.shadow, {"FUSECTRL_POISONED": 0xBAD00001})
+         self.assertFalse(v.passed)
+ 
++    def test_poisoned_shadow_or_crc_aborts_immediately_and_fails_passed(self):
++        # Even when DSOV/FPF/PRIV/CRC look Goldilocks, a poisoned shadow register
++        # MUST stop reading remaining shadows and set passed=False!
++        bar = FakeBar(DSOV=0, STATUS_OPT_GPC=0xBAD01234)
++        v = classify(bar)
++        self.assertFalse(v.passed)
++        self.assertEqual(v.fault, "SHADOW_POISONED:STATUS_OPT_GPC")
++        # Stopped right after reading the first shadow register
++        self.assertEqual(len(v.shadow), 1)
++
++        bar_crc = FakeBar(DSOV=0, CRC_STATUS=0xBADF0055)
++        v_crc = classify(bar_crc)
++        self.assertFalse(v_crc.passed)
++        self.assertEqual(v_crc.fault, "CRC_POISONED")
++        self.assertEqual(bar_crc.reads(), [FUSECTRL, DSOV, FPF_ROW, DSOV_SET, PRIV_MASK, CRC_STATUS])
++
+     def test_other_bad_dsov_values_are_not_goldilocks(self):
+         for dsov in (2, 0xFFFFFFFF):
+             with self.subTest(dsov=hex(dsov)):
+@@ -130,6 +187,44 @@ class ClassifyTest(unittest.TestCase):
+         self.assertFalse(classify(FakeBar()).as_dict()["dsov_written"])
+         self.assertTrue(classify(FakeBar(), write=True).as_dict()["dsov_written"])
+ 
++    def test_bar0_alignment_bounds_and_read_only(self):
++        buf = bytearray(64)
++        bar = Bar0(mm=buf, read_only=False)
++        bar.wr32(0x10, 0xCAFEBABE)
++        self.assertEqual(bar.rd32(0x10), 0xCAFEBABE)
++        for bad in (-4, 1, 2, 64, 62):
++            with self.assertRaises(ValueError):
++                bar.rd32(bad)
++            with self.assertRaises(ValueError):
++                bar.wr32(bad, 0)
++        ro = Bar0(mm=buf, read_only=True)
++        with self.assertRaises(PermissionError):
++            ro.wr32(0x10, 0)
++
++    def test_card_unlock_attempt_revert_reject_err_receipts(self):
++        class StubCard(Card):
++            def __init__(self, reply):
++                self._reply = reply
++
++            def cmd(self, line, wait=0.3, total=3.0, until=None):
++                return self._reply
++
++        self.assertTrue(StubCard("unlock already MATCH (CML 0x08)\nunlock MATCH wp=00 cfg=1229").unlock())
++        self.assertFalse(StubCard("unlock MATCH wp=00 cfg=1229 write=ERR").unlock())
++        self.assertFalse(StubCard("unlock ERR wp=00 cfg=1229").unlock())
++        self.assertFalse(StubCard("unlock LOCKED wp=00 cfg=1229").unlock())
++
++        with self.assertRaises(IOError):
++            StubCard("ERR: line too long (rejected)").attempt(Attempt())
++        with self.assertRaises(IOError):
++            StubCard("glitch ABORT: expected 12 integer args, got 1").attempt(Attempt())
++        rep_fail = StubCard("glitch FAIL: post-shot read\nglitch done pwd=1 e1=0xc2fa writes_failed=0").attempt(Attempt())
++        self.assertGreaterEqual(rep_fail.writes_failed, 1)
++
++        with self.assertRaises(IOError):
++            StubCard("revert FAIL vmin=0 vout=1 mode=1").revert()
++        self.assertIn("PWM-VID restored", StubCard("revert vmin=1 vout=1 mode=1 (PWM-VID restored)").revert())
++
+ 
+ if __name__ == "__main__":
+     unittest.main()
+-- 
+2.56.0
+

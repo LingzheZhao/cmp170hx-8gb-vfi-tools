@@ -189,6 +189,7 @@ def base_env(a):
         env["SENT0_CONTINUE"] = 1
     if getattr(a, "poison_reset", False):
         env["POISON_RESET"] = 1
+        env["FAIL_STOP"] = 0
     if getattr(a, "trace", False):
         env["TRACE"] = 1
     return env
@@ -1200,7 +1201,9 @@ def classify_boot(out, rc):
     if m:
         if rc != 15:
             return "unknown", None, "unconfirmed stall hold: launcher exit %d, expected 15" % rc
-        return ("goldilocks" if "goldilocks signature" in m.group(0) else "partial"), None, m.group(0)
+        # NEVER upgrade a GFW-stalled hold (rc 15) to "goldilocks" even if its log text mentions
+        # "goldilocks signature": GFW did not finish booting, so active sense/burn is FORBIDDEN!
+        return "stall_hold", None, m.group(0)
     if re.search(r"^>>> PARTIAL HELD", out, re.M):
         if rc != 13:
             return "unknown", None, "unconfirmed partial hold: launcher exit %d, expected 13" % rc
@@ -1249,11 +1252,19 @@ def cmd_run(a):
                                                                   _dt.datetime.now().strftime("%Y%m%dT%H%M%S")))
     stop_file = a.stop_file or os.path.join(logdir, "STOP")
     env = dict(os.environ)
-    for k in PLAN_ONLY_ENV:   # never from a leftover shell value: the plan sets them, or bootrun's defaults apply
+    for k in PLAN_ONLY_ENV:   # never from a leftover shell value: safe defaults first, then plan overrides
         env.pop(k, None)
+    # Enforce strict fail-stop defaults even for older plans that omit these keys.
+    env["FAIL_STOP"] = "1"
+    env["BAD0_FOLLOWUP"] = "0"
     env.update({k: str(v) for k, v in plan.get("env", {}).items()})
     env["NO_ON_HOLD"] = "1"
     env.pop("NOCYCLE", None)
+    if str(env.get("FAIL_STOP", "1")) == "1" and (
+        str(env.get("BAD0_FOLLOWUP", "0")) == "1" or str(env.get("POISON_RESET", "0")) == "1"
+    ):
+        print("RUN: contradictory plan env: FAIL_STOP=1 forbids BAD0_FOLLOWUP=1 and POISON_RESET=1")
+        return 2
     if str(env.get("SHOOT_THROUGH_STALLS", 0)) == "1" and not a.owner_ok_shoot_through:   # what bootrun will get
         print("RUN: this plan sets SHOOT_THROUGH_STALLS=1, which breaks upstream's rule 2 (no g, r/j or FLR while GFW "
               "is 0x01) and can wedge the GFW sequencer. Get the card owner's OK, then add --owner-ok-shoot-through.")
@@ -1346,9 +1357,14 @@ def cmd_run(a):
                 print("RUN: %s at plan step %d: the next boot starts at step %d (the rest of a tipped cell is not retried)" % (what, j, j + 1))
                 pos = j + 1
             continue
-        stop = {"goldilocks": "GOLDILOCKS HELD", "partial": "a DSOV-0 frame is held", "mistimed": "a mistimed shot",
-                "latch": "a controller latch (power cycle needed)", "nodip": "a shot that did not run (NO DIP)"}.get(
-            what, "unknown outcome: %s" % (text or what))
+        stop = {
+            "goldilocks": "GOLDILOCKS HELD",
+            "stall_hold": "STALL DSOV0 HELD (GFW stalled — read-only inspection only; DO NOT sense or burn)",
+            "partial": "a DSOV-0 frame is held",
+            "mistimed": "a mistimed shot",
+            "latch": "a controller latch (power cycle needed)",
+            "nodip": "a shot that did not run (NO DIP)",
+        }.get(what, "unknown outcome: %s" % (text or what))
         break
     print("RUN: %s after %d boots. Logs: %s" % ("stopped: " + stop if stop else "plan done", boots, logdir))
     rl("######## RUN %s after %d boots %s" % ("stopped: " + stop if stop else "done", boots,
@@ -1357,10 +1373,13 @@ def cmd_run(a):
     if stop and stop.startswith("GOLDILOCKS"):
         print("RUN: the card is held in the goldilocks state. Leave it as it is. Run your own active sense and "
               "write-window check, then your own reviewed burn tool, if you choose to. This tool never burns.")
+    elif stop and stop.startswith("STALL DSOV0 HELD"):
+        print("RUN: GFW stalled during boot (rc 15). Active sense and burn are FORBIDDEN in this state; "
+              "inspect read-only if desired and power-cycle the host.")
     print("next: %s tally %s" % (os.path.relpath(__file__), logdir))
     if stop is None:
         return 0
-    return 4 if (stop.startswith("GOLDILOCKS") or stop.startswith("a DSOV-0")) else 3
+    return 4 if (stop.startswith("GOLDILOCKS") or stop.startswith("a DSOV-0") or stop.startswith("STALL DSOV0")) else 3
 
 
 def cmd_strategy(a):

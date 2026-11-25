@@ -304,6 +304,8 @@ def poison_reset(card):
 fired = [0]; parked_before = [False]; last_stall = [False]
 if os.environ.get("RETRAIN", "0") != "0" or os.environ.get("SBR", "0") != "0":
     print("STOP: RETRAIN and SBR are not allowed during a campaign (no setpci retrain, no secondary bus reset)"); sys.exit(2)
+if FAIL_STOP and (os.environ.get("BAD0_FOLLOWUP") == "1" or POISON_RESET):
+    print("STOP: FAIL_STOP=1 forbids BAD0_FOLLOWUP=1 and POISON_RESET=1"); sys.exit(2)
 V_MAX = 825   # no dip above the highest restore the runner allows: the firmware has no voltage limit of its own
 def step_ok(f):
     v, td, np_, pw, vr, fs, hold, tr, rev, dly, gp, tv = f
@@ -357,7 +359,10 @@ if True:
         if CONT and skip[0] == i: continue
         if CONT and k > 0 and SEQX[k - 1][0] != i: clost[0] = 0
         if PARK_EACH and k > 0:
-            if park(card)[0] != 0:
+            rc_, pl_ = park(card)
+            if rc_ != 0:
+                if FAIL_STOP:
+                    print("PARK FAILED before step %d (FAIL_STOP=1, no retry): %s; stop" % (i, pl_)); sys.exit(7)
                 time.sleep(20)
                 rc_, pl_ = park(None)
                 if rc_ != 0: print("PARK FAILED before step %d: %s; stop" % (i, pl_)); sys.exit(7)
@@ -386,12 +391,12 @@ if True:
         # firmware echo (resolved pw/gap and knobs), WARN lines, timing records, release_at, rail_code
         for ln in (getattr(rep, "raw", "") or "").splitlines():
             if ln.startswith(("glitch ", "timing ", "prime_at=", "release_at=", "rail_code=")): print("   " + ln.strip(), flush=True)
+        if getattr(rep, "writes_failed", None) != 0 or "glitch FAIL" in (getattr(rep, "raw", "") or ""):
+            print("STOP: PMBus/setup writes failed (or status readback failed) on step %d: writes_failed=%s" % (i, getattr(rep, "writes_failed", None)), flush=True)
+            shot("unknown", {}, "writes failed"); tr_dump(); sys.exit(11)
         if not getattr(rep, "pwd", False) or getattr(rep, "e1", None) != 0xC2FA:
             print("step %d v=%d td=%d pw=%d vr=%d f=%d: NO DIP (controller pwd=%s e1=0x%04x): the shot did not run; stop" % (i, v, td, pw, vr, fs, getattr(rep, "pwd", "?"), getattr(rep, "e1", 0)), flush=True)
             shot("nodip", {}, "NO DIP"); tr_dump(); sys.exit(12)
-        if getattr(rep, "writes_failed", None) != 0:
-            print("STOP: PMBus/setup writes failed or were not reported on step %d: %s" % (i, getattr(rep, "writes_failed", None)), flush=True)
-            shot("unknown", {}, "writes failed"); tr_dump(); sys.exit(11)
         mistimed = release_check(getattr(rep, "raw", "") or "")
         if TRACE:
             try:
@@ -448,7 +453,7 @@ if True:
                             tr_dump(); sys.exit(15)
                     else:   # stalled: GFW still booting, DSOV not 0
                         out = "booting GFW=0x%08x (GFW stall)" % sregs.get("GFW", o["registers"]["GFW"] or 0)
-                if os.environ.get("BAD0_FOLLOWUP") == "1" and out.startswith("poisoned FUSECTRL=0xbad0"):
+                if not FAIL_STOP and os.environ.get("BAD0_FOLLOWUP") == "1" and out.startswith("poisoned FUSECTRL=0xbad0"):
                     # log-only follow-up (2026-11-20): PRI error at FUSECTRL may be a slow boot; one FUSECTRL re-read
                     # after 3 s, and the passive set only if FUSECTRL is back at exact idle. Never changes out.
                     time.sleep(3.0); fc2 = bar.rd32(0x820000)
@@ -531,7 +536,7 @@ if True:
                 if nshots[0] >= SHOTCAP:
                     print("cell %d (cut) v=%d td=%d np=%d pw=%d vr=%d: %s" % (i, v, td, np_, pw, vr, c_), flush=True); ended[0] = "SHOT CAP %d reached" % SHOTCAP; break
                 continue
-            if POISON_RESET and out.startswith("poisoned "):
+            if not FAIL_STOP and POISON_RESET and out.startswith("poisoned "):
                 hr = poison_reset(card)
                 if hr is None:
                     print("STOP: device readiness unreadable before poison reset", flush=True)

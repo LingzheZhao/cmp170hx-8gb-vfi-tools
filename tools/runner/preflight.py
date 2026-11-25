@@ -47,5 +47,6 @@ with Card(port) as c:
             print(f"  {name} = {v:#06x}{extra}")
         except Exception as ex:
             print(f"  {name}: read failed ({ex})")
+            bad += 1
 print("PREFLIGHT", "OK" if bad == 0 else f"FAILED ({bad} problem(s)): do not glitch until reviewed")
 sys.exit(0 if bad == 0 else 1)

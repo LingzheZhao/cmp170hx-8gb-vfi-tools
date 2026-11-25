@@ -41,6 +41,23 @@ RUNNER=${RUNNER:-$HERE/bisect_shots.py}
 TRACE=${TRACE:-0}; PARK_EACH=${PARK_EACH:-0}; FLOOR=${FLOOR:-338}; TMIN=${TMIN:-375}; TCAP=${TCAP:-300}
 PORT=${PICO_PORT:-/dev/ttyACM0}; H=$BENCH_SSH
 
+# Validate local card plan configuration BEFORE any power cycle so bad config never cycles the bench.
+DIE=""
+if [ -n "$DIE_DUMP" ]; then   # die ID: fuse rows 8-15 of the card must match this checksummed plan dump
+  case " $PLAN_FILES " in *" $DIE_DUMP "*) DIE="$PLAN_REMOTE/$DIE_DUMP" ;;
+    *) echo "card_$CARD: DIE_DUMP ($DIE_DUMP) must be one of PLAN_FILES, so it is checksummed: stop"; exit 2 ;; esac
+elif [ -n "$PLAN_FILES" ]; then
+  echo "WARNING: card_$CARD names plan files but no DIE_DUMP: the die ID is not checked (two cards with the same GPC/SM/ceiling look identical)"
+fi
+local_sha=""
+if [ -n "$PLAN_FILES" ]; then
+  nf=$(echo "$PLAN_FILES" | wc -w)
+  # shellcheck disable=SC2086
+  local_sha=$(cd "$PLAN_LOCAL" && sha256sum $PLAN_FILES) || { echo "PLAN SHA FAILED (local hash): stop"; exit 4; }
+  [ "$(echo "$local_sha" | grep -cE '^[0-9a-f]{64}  ')" = "$nf" ] \
+    || { echo "PLAN SHA FAILED (need $nf hashes on local side): stop"; exit 4; }
+fi
+
 bid0=""
 if [ "${NOCYCLE:-0}" != 1 ]; then
   # boot id before the cycle (empty when the bench is off): power.sh's wol/manual paths take the first missed ping as
@@ -55,22 +72,13 @@ u=$(bench_uptime); bid=$(ssh -o ConnectTimeout=3 $(ssh_batch) "$H" cat /proc/sys
 echo "bench up ${u:-?}s boot_id ${bid:-?}"; [ "${u:-99999}" -lt "${FRESH_MAX:-900}" ] || { echo "NOT A FRESH BOOT: stop"; exit 6; }
 [ -z "$bid0" ] || { [ -n "$bid" ] && [ "$bid" != "$bid0" ]; } \
   || { echo "NOT A FRESH BOOT: boot_id ${bid:-unreadable} after the power cycle, $bid0 before: stop"; exit 6; }
-DIE=""
-if [ -n "$DIE_DUMP" ]; then   # die ID: fuse rows 8-15 of the card must match this checksummed plan dump
-  case " $PLAN_FILES " in *" $DIE_DUMP "*) DIE="$PLAN_REMOTE/$DIE_DUMP" ;;
-    *) echo "card_$CARD: DIE_DUMP ($DIE_DUMP) must be one of PLAN_FILES, so it is checksummed: stop"; exit 2 ;; esac
-elif [ -n "$PLAN_FILES" ]; then
-  echo "WARNING: card_$CARD names plan files but no DIE_DUMP: the die ID is not checked (two cards with the same GPC/SM/ceiling look identical)"
-fi
 if [ -n "$PLAN_FILES" ]; then
   # Hash lines include the file names; both sides must hash every plan file, and match line for line.
-  nf=$(echo "$PLAN_FILES" | wc -w)
   # shellcheck disable=SC2086
-  a=$(cd "$PLAN_LOCAL" && sha256sum $PLAN_FILES) || { echo "PLAN SHA FAILED (local hash): stop"; exit 4; }
   b=$(ssh "$H" "cd $(printf %q "$PLAN_REMOTE") && sha256sum $PLAN_FILES") || { echo "PLAN SHA FAILED (bench hash): stop"; exit 4; }
-  [ "$(echo "$a" | grep -cE '^[0-9a-f]{64}  ')" = "$nf" ] && [ "$(echo "$b" | grep -cE '^[0-9a-f]{64}  ')" = "$nf" ] \
-    || { echo "PLAN SHA FAILED (need $nf hashes on each side): stop"; exit 4; }
-  [ "$a" = "$b" ] && echo "PLAN SHA MATCH ($CARD)" || { echo "PLAN SHA MISMATCH: stop"; exit 4; }
+  [ "$(echo "$b" | grep -cE '^[0-9a-f]{64}  ')" = "$nf" ] \
+    || { echo "PLAN SHA FAILED (need $nf hashes on bench side): stop"; exit 4; }
+  [ "$local_sha" = "$b" ] && echo "PLAN SHA MATCH ($CARD)" || { echo "PLAN SHA MISMATCH: stop"; exit 4; }
 fi
 ssh "$H" "mkdir -p $(printf %q "$BENCH_DIR")" && scp -q "$RUNNER" "$H:$BENCH_DIR/bisect_shots.py" \
   && scp -q "$HERE/park.py" "$HERE/preflight.py" "$TOOLS/vfi_snap.py" "$TOOLS/vfi_common.py" "$H:$BENCH_DIR/" \
@@ -78,7 +86,7 @@ ssh "$H" "mkdir -p $(printf %q "$BENCH_DIR")" && scp -q "$RUNNER" "$H:$BENCH_DIR
 L=${BOOTRUN_LOG:-${LOG_DIR:-.}/bootrun-$CARD.last}; mkdir -p "$(dirname "$L")"
 # the hold check below greps this file: empty it first, so a log tee cannot write never shows an old run's hold
 : 2>/dev/null > "$L" || { echo "RUN LOG $L is not writable: stop"; exit 2; }
-XENV="REPEAT=${REPEAT:-1} SHOTCAP=${SHOTCAP:-450} LOSTRUN=${LOSTRUN:-8} RESTORE_WAIT=${RESTORE_WAIT:-8.0} CELLLOST=${CELLLOST:-0} CLASSIFY_WRITE=${CLASSIFY_WRITE:-0} SENTINEL=${SENTINEL:-0x820410} BAD0_FOLLOWUP=${BAD0_FOLLOWUP:-0} GFW_WAIT=${GFW_WAIT:-5} LOST_NOPARK=${LOST_NOPARK:-0} FAIL_STOP=${FAIL_STOP:-0} PARTIAL_CONTINUE=${PARTIAL_CONTINUE:-0} SHOOT_THROUGH_STALLS=${SHOOT_THROUGH_STALLS:-0} STALLRUN=${STALLRUN:-8} SENT0_CONTINUE=${SENT0_CONTINUE:-0} POISON_RESET=${POISON_RESET:-0} SENTINEL_EXPECT=$SENTINEL_EXPECT"
+XENV="REPEAT=${REPEAT:-1} SHOTCAP=${SHOTCAP:-450} LOSTRUN=${LOSTRUN:-8} RESTORE_WAIT=${RESTORE_WAIT:-8.0} CELLLOST=${CELLLOST:-0} CLASSIFY_WRITE=${CLASSIFY_WRITE:-0} SENTINEL=${SENTINEL:-0x820410} BAD0_FOLLOWUP=${BAD0_FOLLOWUP:-0} GFW_WAIT=${GFW_WAIT:-5} LOST_NOPARK=${LOST_NOPARK:-0} FAIL_STOP=${FAIL_STOP:-1} PARTIAL_CONTINUE=${PARTIAL_CONTINUE:-0} SHOOT_THROUGH_STALLS=${SHOOT_THROUGH_STALLS:-0} STALLRUN=${STALLRUN:-8} SENT0_CONTINUE=${SENT0_CONTINUE:-0} POISON_RESET=${POISON_RESET:-0} SENTINEL_EXPECT=$SENTINEL_EXPECT"
 ssh "$H" "bash -s -- $(printf '%q ' "$TAG" "$SEQ" "$GPC" "$SMC" "$FLOOR" "$TMIN" "$TCAP" "$TRACE" "$PARK_EACH" "$XENV" "${RUNTO:-900}" "$BENCH_DIR" "$BENCH_PY" "${BENCH_TASKSET:-}" "$PORT" "$CARD_BDF" "${GLITCH_CMDLINE:-}" "${MASK_PCIEHP:-0}" "${TSTART:-99999}" "$DIE")" <<'R' | tee "$L"
 TAG=$1; SEQ=$2; GPC=$3; SMC=$4; FLOOR=$5; TMIN=$6; TCAP=$7; TRACE=$8; PARK_EACH=$9; XENV=${10}; RUNTO=${11}
 D=${12}; PY=${13}; TS=${14}; PORT=${15}; BDF=${16}; CMDW=${17}; MASK=${18}; TSTART=${19:-99999}; DIE=${20:-}
@@ -110,21 +118,37 @@ p = f"/sys/bus/pci/devices/{sys.argv[1]}"
 cfg = open(p + "/config", "rb").read(8)
 if cfg[:4] == b"\xff\xff\xff\xff": print("LINKDOWN"); sys.exit()
 if not (cfg[4] & 2): print("NODECODE"); sys.exit()
-fd = os.open(p + "/resource0", os.O_RDONLY | os.O_SYNC); m = mmap.mmap(fd, 0x200000, mmap.MAP_SHARED, mmap.PROT_READ); os.close(fd)
-print(hex(memoryview(m).cast("I")[0x118234 // 4] & 0xff))
+fd = os.open(p + "/resource0", os.O_RDONLY | os.O_SYNC); m = mmap.mmap(fd, 0x822000, mmap.MAP_SHARED, mmap.PROT_READ); os.close(fd)
+mv = memoryview(m).cast("I")
+fc = int(mv[0x820000 // 4])
+if fc == 0xFFFFFFFF or ((fc >> 20) & 0xFFF) == 0xBAD or ((fc >> 16) & 31) != 4 or (fc & 0xF) != 0:
+    print(f"BADCTRL:{fc:#010x}"); sys.exit()
+gfw = int(mv[0x118234 // 4])
+if gfw == 0xFFFFFFFF or ((gfw >> 20) & 0xFFF) == 0xBAD:
+    print(f"BADGFW:{gfw:#010x}"); sys.exit()
+if (gfw & 0xFF) != 0xFF:
+    print(f"NOTREADY:{gfw:#010x}"); sys.exit()
+print(f"{gfw:#010x}")
 P
 )
-case "$GFW" in 0x1) stop "HOST GUARD: GFW boot progress reads 0x01 (still booting)" 3;; LINKDOWN|NODECODE|"") stop "HOST GUARD: config space says $GFW" 3;; esac
+case "$GFW" in
+  BADCTRL:*|BADGFW:*|NOTREADY:*|LINKDOWN|NODECODE|"") stop "HOST GUARD: BAR0/GFW pre-check failed ($GFW)" 3;;
+esac
 echo "card $BDF gfw=$GFW pico=$PORT"
 CRP=$(basename "$(dirname "$(readlink -f "/sys/bus/pci/devices/$BDF")")")
 if [ "$MASK" = 1 ] && lspci -s "$CRP" -vv 2>/dev/null | grep -q "HotPlug+"; then setpci -s "$CRP" CAP_EXP+18.w=0000:1028; echo "pciehp interrupts masked on $CRP (SltCtl=$(setpci -s "$CRP" CAP_EXP+18.w))"; fi
 temp(){ $PYV -I -c "import sys
 from ga100vfi.glitch import Card
 c = Card(sys.argv[1]); d = c.read(0x25, 0x8D, 2); print(d[0] | d[1] << 8); c.close()" "$PORT" 2>/dev/null; }
-timeout 60 $PYV -I "$D/preflight.py" "$PORT" > /tmp/vfi-pf.out 2>&1; grep -E "PREFLIGHT|pico v" /tmp/vfi-pf.out
-grep -q "PREFLIGHT OK" /tmp/vfi-pf.out || { echo "PREFLIGHT FAILED: stop"; tail -4 /tmp/vfi-pf.out; exit 3; }
-timeout 60 $PYV -E -s "$D/vfi_snap.py" --bdf "$BDF" --port "$PORT" --label preflight --outdir "$D/snaps" ${DIE:+--die-id "$DIE"} > /tmp/vfi-snap.out 2>&1
+timeout 60 $PYV -I "$D/preflight.py" "$PORT" > /tmp/vfi-pf.out 2>&1; pf_rc=$?
+grep -E "PREFLIGHT|pico v" /tmp/vfi-pf.out
+[ "$pf_rc" -eq 0 ] && grep -q "PREFLIGHT OK" /tmp/vfi-pf.out || { echo "PREFLIGHT FAILED (rc=$pf_rc): stop"; tail -4 /tmp/vfi-pf.out; exit 3; }
+timeout 60 $PYV -E -s "$D/vfi_snap.py" --bdf "$BDF" --port "$PORT" --label preflight --outdir "$D/snaps" ${DIE:+--die-id "$DIE"} > /tmp/vfi-snap.out 2>&1; snap_rc=$?
 grep -E "verdict|GPC dis" /tmp/vfi-snap.out
+if [ "$snap_rc" -eq 5 ]; then
+  grep -E "die ID|DIE ID" /tmp/vfi-snap.out; echo "DIE ID MISMATCH or unreadable: stop"; exit 5
+fi
+[ "$snap_rc" -eq 0 ] || { echo "PREFLIGHT SNAPSHOT FAILED (rc=$snap_rc): stop"; tail -6 /tmp/vfi-snap.out; exit 3; }
 grep -q "GPC dis/def/st=$GPC/" /tmp/vfi-snap.out && grep -q "$SMC" /tmp/vfi-snap.out && echo "IDENTITY OK: $TAG" || { echo "IDENTITY MISMATCH: stop"; exit 5; }
 if [ -n "$DIE" ]; then
   grep -q "die ID (fuse rows 8-15): match" /tmp/vfi-snap.out && echo "DIE ID OK: $TAG" \
@@ -140,9 +164,13 @@ if ! { [ "$v" -ge "$TMIN" ] && [ "$v" -le "$TSTART" ]; } 2>/dev/null; then
 echo "START temp_raw=$v $(date +%H:%M:%S)"
 echo "run env: $XENV timeout ${RUNTO}s"
 # shellcheck disable=SC2086
-env $XENV VFI_BDF="$BDF" VFI_PORT="$PORT" VFI_TRACE_DIR="$D" FLOOR="$FLOOR" TRACE="$TRACE" PARK_EACH="$PARK_EACH" timeout "$RUNTO" $PYV -I "$D/bisect_shots.py" "$TAG" "$SEQ"
-rc=$?
-echo "end temp_raw=$(temp) runner_rc=$rc"
+env $XENV VFI_BDF="$BDF" VFI_PORT="$PORT" VFI_TRACE_DIR="$D" FLOOR="$FLOOR" TRACE="$TRACE" PARK_EACH="$PARK_EACH" timeout "$RUNTO" $PYV -I "$D/bisect_shots.py" "$TAG" "$SEQ" | tee /tmp/vfi-run.out
+rc=${PIPESTATUS[0]}
+if [ "$rc" -eq 0 ] && ! grep -qE "^>>> (GOLDILOCKS|PARTIAL|STALL DSOV0) HELD" /tmp/vfi-run.out; then
+  echo "end temp_raw=$(temp) runner_rc=$rc"
+else
+  echo "end temp_raw=skipped_after_hold_or_fail runner_rc=$rc"
+fi
 exit $rc
 R
 rc=${PIPESTATUS[0]}

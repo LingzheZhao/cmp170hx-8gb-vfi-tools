@@ -10,3 +10,5 @@
 0010-host-passive_snapshot-stops-at-0xBAD0-reads-a-busy-F.patch
 0011-firmware-push3-a-PMBus-write-may-run-across-the-PEX_.patch
 0012-host-Bar0.wr32-writes-one-aligned-32-bit-store.patch
+0013-host-cmake-stop-classify-on-0xBAD0-poison-fix-attemp.patch
+0014-harden-firmware-and-host-safety-guards.patch

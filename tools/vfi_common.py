@@ -390,6 +390,9 @@ def read_outcome(bdf: str, restore_wait: float) -> Shot:
         if is_poisoned(ctrl):
             return Shot("poisoned", fusectrl=ctrl)
         v = classify(bar)       # firmware/0005: passive by default (no EN_SW_OVERRIDE write)
+    fault = getattr(v, "fault", None)
+    if fault is not None:
+        return Shot("poisoned" if "POISONED" in fault else "lost", fusectrl=ctrl)
     if is_poisoned(v.dsov):
         return Shot("poisoned", fusectrl=ctrl)  # DSOV 0xBADFxxxx behind a healthy FUSECTRL; classify read nothing more
     if v.passed:
@@ -476,10 +479,13 @@ class Bench:
         self.ledger.check()
         s = fire(self.card, self.bdf, attempt, self.args.restore_wait, self.need_trace)
         self.ledger.add(s.outcome)
-        if s.outcome == "poisoned":   # stays poisoned until a power cycle: no further shot on this boot (parked on exit)
+        if s.outcome == "poisoned":   # stays poisoned until a power cycle: no further shot on this boot
             raise BenchStop(f"the shot poisoned the fuse controller (FUSECTRL {s.fusectrl or 0:#010x}): it stays "
-                            "poisoned until a power cycle; the card is parked; power-cycle the host before another "
+                            "poisoned until a power cycle; skipping auto-park; power-cycle the host before another "
                             "shot")
+        if s.outcome == "nack" or (s.writes_failed is not None and s.writes_failed > 0):
+            raise BenchStop(f"shot execution/writes failed (outcome={s.outcome}, writes_failed={s.writes_failed}): "
+                            "state unknown; review logs and power-cycle the host")
         return s
 
     def hold(self, msg: str) -> None:

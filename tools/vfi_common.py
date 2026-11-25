@@ -135,8 +135,8 @@ def vrm16(card, reg: int) -> int:
 
 
 def ensure_unlocked(card) -> bool:
-    pwd, _ = card.lock_status()
-    return True if pwd else card.unlock()
+    # Always send 'u' so firmware/0007 re-applies 0x13=0x00 and 0x46=0x1229 even when pwd=1.
+    return card.unlock()
 
 
 def fw_status(card) -> str:
@@ -492,7 +492,9 @@ class Bench:
         if self.card is None:
             return False
         try:
-            if not self.holding:
+            if et is not None:
+                self.log("exiting on error/interrupt: skipping automatic park; review logs and power cycle")
+            elif not self.holding:
                 r = park(self.card, self.bdf)
                 self.log("final " + r.line())
         except Exception as e:  # noqa: BLE001

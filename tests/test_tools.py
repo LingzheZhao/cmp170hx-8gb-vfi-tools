@@ -387,7 +387,7 @@ class HuntTests(unittest.TestCase):
                 self.assertEqual(rc, 3, out)
                 self.assertIn("poisoned the fuse controller", out)
                 self.assertEqual(len([e for e in sim.events if e[0] == "g"]), 2)   # no shot after the poison
-                self.assertEqual(sim.e1, vc.E1_GPU)                              # parked on the way out
+                self.assertEqual(sim.e1, vc.E1_PMBUS)                            # error exit skips automatic park
 
     def test_boot_ledger_cap(self):
         sim = Sim(lambda a: "under")
@@ -395,7 +395,7 @@ class HuntTests(unittest.TestCase):
             rc, out = run_tool("vfi_hunt", ARGS + ["--budget", "50", "--max-shots-per-boot", "7"])
         self.assertEqual(rc, 3, out)
         self.assertEqual(sum(1 for e in sim.events if e[0] == "g"), 7)
-        self.assertEqual(sim.e1, vc.E1_GPU)          # parked on the way out
+        self.assertEqual(sim.e1, vc.E1_PMBUS)          # error exit skips automatic park
 
     def test_first_shot_parks_before_every_shot(self):
         sim = Sim(lambda a: "under")

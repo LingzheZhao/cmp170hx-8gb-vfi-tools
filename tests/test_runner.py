@@ -595,6 +595,26 @@ class RunnerStallAndRecoveryTest(unittest.TestCase):
         self.assertEqual(rc, 10, out)
         self.assertIn("2 lost in a row", out)
 
+    def test_fail_stop_skips_park_and_auto_reset(self):
+        # Cell-mode lost shot with FAIL_STOP=1 stops immediately: zero PARK, zero 'r' reset
+        rc, out, ev = run([CELL3], "vuu", LOST_NOPARK=1, FAIL_STOP=1)
+        self.assertEqual(rc, 10, out)
+        self.assertIn("FAIL_STOP=1", out)
+        self.assertNotIn("PARK", ev)
+        self.assertNotIn("SER r", ev)
+        # Poisoned shot with FAIL_STOP=1 skips PARK
+        rc, out, ev = run([STD], "x", FAIL_STOP=1)
+        self.assertEqual(rc, 10, out)
+        self.assertNotIn("PARK", ev)
+        # Mistimed shot with FAIL_STOP=1 skips PARK
+        rc, out, ev = run([STD], "L", FAIL_STOP=1)
+        self.assertEqual(rc, 14, out)
+        self.assertNotIn("PARK", ev)
+        # Sequence exhausted with FAIL_STOP=1 skips end-of-boot PARK
+        rc, out, ev = run([STD], "u", FAIL_STOP=1)
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn("PARK", ev)
+
     def test_shot_lines_carry_the_geometry_and_mark_the_first_shot(self):
         seq = [[381, 62, 1, 198, 750, 0, 2, 0, -20, 0, 117, 150], [375, 60, 3, 120, 700, 1, 1, 0, -20, 0, 300, 100]]
         rc, out, ev = run(seq, "uku", FLOOR=375)

@@ -175,10 +175,19 @@ def snapshot(a, ident, cfg_cmd, mv32) -> int:
                            "Park the card (vfi_park.py) before reading it.")
     out = {"bdf": a.bdf, "identity": ident, "pci_command": hex(cfg_cmd), "label": a.label,
            "utc": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")}
-    r = {k: rd(v) for k, v in REGS.items()}
+    r = {}
+    for k, v in REGS.items():
+        val = rd(v)
+        if vc.is_poisoned(val):
+            raise vc.BenchStop(f"{k} reads {val:#010x}: poisoned controller; stopped immediately.")
+        r[k] = val
     out["regs"] = {k: f"{v:#010x}" for k, v in r.items()}
-    out["aliases"] = {f"{x:#08x}": f"{rd(x):#010x}" for x in ALIASES}
-    out["aliases_zero"] = sum(1 for x in ALIASES if rd(x) == 0)
+    alias_vals = {x: rd(x) for x in ALIASES}
+    for x, val in alias_vals.items():
+        if vc.is_poisoned(val):
+            raise vc.BenchStop(f"alias {x:#08x} reads {val:#010x}: poisoned controller; stopped immediately.")
+    out["aliases"] = {f"{x:#08x}": f"{val:#010x}" for x, val in alias_vals.items()}
+    out["aliases_zero"] = sum(1 for val in alias_vals.values() if val == 0)
     g = {"tpc_disable": [rd(0x820760 + 4 * i) for i in range(8)], "tpc_defective": [rd(x) for x in TPC_DEFECTIVE],
          "tpc_reconfig": [rd(x) for x in TPC_RECONFIG], "reconfig_override": [rd(0x820A40 + 4 * i) for i in range(8)],
          "tpc_status": [rd(0x820C38 + 4 * i) for i in range(8)], "pes_status": [rd(0x820DBC + 4 * i) for i in range(8)]}
@@ -239,20 +248,25 @@ def snapshot(a, ident, cfg_cmd, mv32) -> int:
             out["rows_error"] = str(e)
             warn.append("ROW READ FAILED: " + str(e))
         finally:
-            if idle():
+            if "rows_error" not in out and idle():
                 wr(ADDR, orig_addr)
+            elif "rows_error" in out:
+                warn.append("row read errored; FUSEADDR not restored and no further BAR0 reads performed")
             else:
                 warn.append("controller busy after the row read; FUSEADDR not restored")
-        after = {k: rd(REGS[k]) for k in keys}
-        out["state_unchanged_by_row_read"] = before == after
-        if before != after:
-            warn.append("gate/status registers changed during the row read")
-        if len(rows) == 2:
-            out["rows_match"] = rows[0] == rows[1]
-            out["rows"] = [f"{v:#010x}" for v in rows[0]]
-            out["rows_nonzero"] = sum(1 for v in rows[0] if v)
-            if not out["rows_match"]:
-                warn.append("ROW READS DIFFER between passes")
+        if "rows_error" not in out:
+            after = {k: rd(REGS[k]) for k in keys}
+            out["state_unchanged_by_row_read"] = before == after
+            if before != after:
+                warn.append("gate/status registers changed during the row read")
+            if len(rows) == 2:
+                out["rows_match"] = rows[0] == rows[1]
+                out["rows"] = [f"{v:#010x}" for v in rows[0]]
+                out["rows_nonzero"] = sum(1 for v in rows[0] if v)
+                if not out["rows_match"]:
+                    warn.append("ROW READS DIFFER between passes")
+        else:
+            out["state_unchanged_by_row_read"] = None
 
     if a.die_id:
         want = load_die_id(a.die_id)
@@ -270,9 +284,18 @@ def snapshot(a, ident, cfg_cmd, mv32) -> int:
             if bad:
                 warn.append(f"DIE ID MISMATCH: fuse rows {bad} differ from {a.die_id}: not the card that dump came from")
 
-    fn = os.path.join(a.outdir, f"{datetime.datetime.now().strftime('%Y%m%dT%H%M%S')}-{a.label}.json")
+    stem = f"{datetime.datetime.now().strftime('%Y%m%dT%H%M%S')}-{a.label}"
     os.makedirs(a.outdir, mode=0o700, exist_ok=True)
-    with os.fdopen(os.open(fn, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as f:
+    for seq in range(100):
+        fn = os.path.join(a.outdir, f"{stem}.json" if seq == 0 else f"{stem}-{seq}.json")
+        try:
+            fd_out = os.open(fn, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            break
+        except FileExistsError:
+            continue
+    else:
+        raise RuntimeError(f"could not allocate unique snapshot file for {stem}")
+    with os.fdopen(fd_out, "w") as f:
         json.dump(out, f, indent=1)
     s = out["regs"]
     print(f"{a.bdf} driver={ident['driver']} verdict: {verdict}")

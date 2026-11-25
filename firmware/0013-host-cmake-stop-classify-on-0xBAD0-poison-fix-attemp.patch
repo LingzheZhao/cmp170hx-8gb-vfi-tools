@@ -1,0 +1,131 @@
+From 2de397d530e53b5125c4929cedaf6940d59522d2 Mon Sep 17 00:00:00 2001
+From: Lingzhe Zhao <zhaolingzhe@westlake.edu.cn>
+Date: Wed, 25 Nov 2026 20:21:00 +0900
+Subject: [PATCH] host/cmake: stop classify on 0xBAD0 poison, fix attempt CLI
+ flags, clarify RP2350B board family
+
+- host/ga100vfi/classify.py: check (value >> 20) == 0xBAD on both FUSECTRL and DSOV
+  so 0xBAD0xxxx as well as 0xBADFxxxx stops immediately with zero further reads/writes
+- host/ga100vfi/cli.py: add missing --fast and --hold-ms flags to attempt subparser,
+  honor --no-unlock in cmd_attempt, and always send 'u' in _ensure_unlocked for 0007
+- firmware/CMakeLists.txt: clarify BOARD_RP2350B is Waveshare RP2350B-Plus-W (GP42 ADC2)
+  while official Pico 2 / Pico 2 W use BOARD_RP2350A (GP26-GP29)
+---
+ firmware/CMakeLists.txt   |  8 ++++----
+ host/ga100vfi/classify.py |  4 ++--
+ host/ga100vfi/cli.py      | 10 +++++++---
+ host/test_classify.py     | 22 ++++++++++++++++------
+ 4 files changed, 29 insertions(+), 15 deletions(-)
+
+diff --git a/firmware/CMakeLists.txt b/firmware/CMakeLists.txt
+index e5c1594..d04365f 100644
+--- a/firmware/CMakeLists.txt
++++ b/firmware/CMakeLists.txt
+@@ -4,10 +4,10 @@ project(pwmvid C CXX ASM)
+ pico_sdk_init()
+ 
+ # Board family: enable at most one (see firmware/board.h).
+-#   RP2350A  = Pico 2                       (ADC on GP26-GP29 only)
+-#   RP2350B  = Pico 2 W / Waveshare Plus-W  (ADC on GP40-GP47)   <- default
+-option(BOARD_RP2350A "Build for RP2350A (Pico 2)" OFF)
+-option(BOARD_RP2350B "Build for RP2350B (Pico 2 W / Plus-W)" OFF)
++#   RP2350A  = Official Pico 2 / Pico 2 W   (ADC on GP26-GP29 only)
++#   RP2350B  = Waveshare RP2350B-Plus-W     (ADC on GP40-GP47, GP42=ADC2) <- default
++option(BOARD_RP2350A "Build for RP2350A (Official Pico 2 / Pico 2 W)" OFF)
++option(BOARD_RP2350B "Build for RP2350B (Waveshare RP2350B-Plus-W)" OFF)
+ 
+ # DEBUG: budget oscilloscope build — 400 MHz overclock + NVVDD ADC trace
+ # (PIN_NVVDD_ADC in board.h: GP42 on RP2350B, GP26 on RP2350A).
+diff --git a/host/ga100vfi/classify.py b/host/ga100vfi/classify.py
+index a83aaf7..726dee4 100644
+--- a/host/ga100vfi/classify.py
++++ b/host/ga100vfi/classify.py
+@@ -88,11 +88,11 @@ def snapshot(bar) -> dict[str, int]:
+ 
+ 
+ FUSECTRL = 0x00820000
+-POISON_TAG = 0xBADF0000
+ 
+ 
+ def _poisoned(value: int) -> bool:
+-    return (value & 0xFFFF0000) == POISON_TAG
++    """True for any NVIDIA PRI error sentinel 0xBAD0xxxx..0xBADFxxxx."""
++    return ((value >> 20) & 0xFFF) == 0xBAD
+ 
+ 
+ def classify(bar, baseline: dict[str, int] | None = None, write: bool | None = None) -> Verdict:
+diff --git a/host/ga100vfi/cli.py b/host/ga100vfi/cli.py
+index 03c3ecb..13ac4c6 100644
+--- a/host/ga100vfi/cli.py
++++ b/host/ga100vfi/cli.py
+@@ -38,6 +38,10 @@ def cmd_attempt(args) -> int:
+                 args.t_restore, args.t_revert, args.fast, args.hold_ms,
+                 args.pulses, args.pw, args.gap, args.delay, args.revert)
+     with Card(args.port) as card:
++        if not args.no_unlock and not _ensure_unlocked(card):
++            print("unlock failed: controller locked until VDD33 cycles",
++                  file=sys.stderr)
++            return 2
+         rep = card.attempt(a)
+         print(f"pwd={rep.pwd} e1=0x{rep.e1:04x} nvvdd={rep.nvvdd} "
+               f"writes_failed={rep.writes_failed}")
+@@ -47,9 +51,7 @@ def cmd_attempt(args) -> int:
+ 
+ 
+ def _ensure_unlocked(card: Card) -> bool:
+-    pwd, _ = card.lock_status()
+-    if pwd:
+-        return True
++    # Always send 'u' so firmware/0007 re-applies 0x13=0x00 and 0x46=0x1229.
+     return card.unlock()
+ 
+ 
+@@ -214,6 +216,8 @@ def main(argv=None) -> int:
+                    help="3 for the Goldilocks triple pulse")
+     a.add_argument("--pw", type=int, default=0, help="pulse width us (0=auto)")
+     a.add_argument("--gap", type=int, default=0, help="gap between pulses us (0=auto)")
++    a.add_argument("--fast", type=int, default=1, help="fast slew profile mode (0=slow, 1=fast)")
++    a.add_argument("--hold-ms", type=int, default=0, help="SCL hold duration ms (keep 0)")
+     a.add_argument("--revert", type=int, default=1, choices=(0, 1),
+                    help="1=hand back to PWM-VID after dip; 0=stay PMBus (fast campaigns)")
+     a.add_argument("--no-unlock", action="store_true")
+diff --git a/host/test_classify.py b/host/test_classify.py
+index 05dbc3d..7ebc035 100644
+--- a/host/test_classify.py
++++ b/host/test_classify.py
+@@ -102,16 +102,26 @@ class ClassifyTest(unittest.TestCase):
+ 
+     def test_poisoned_dsov_stops_before_any_write(self):
+         os.environ["CLASSIFY_WRITE"] = "1"
+-        bar = FakeBar(DSOV=0xBADF1701)
++        for bad_dsov in (0xBADF1701, 0xBAD00100):
++            with self.subTest(dsov=hex(bad_dsov)):
++                bar = FakeBar(DSOV=bad_dsov)
++                v = classify(bar)
++                self.assertEqual(bar.log, [("rd", FUSECTRL), ("rd", DSOV)])
++                self.assertEqual(v.dsov, bad_dsov)
++                self.assertEqual((v.priv_mask, v.crc_status, v.fpf_row), (0, 0, UNREADABLE))
++                self.assertEqual(v.shadow, {"DSOV_POISONED": bad_dsov})
++                self.assertFalse(v.passed)
++
++    def test_poisoned_bad0_fusectrl_reads_nothing_else(self):
++        os.environ["CLASSIFY_WRITE"] = "1"
++        bar = FakeBar(FUSECTRL=0xBAD00001)
+         v = classify(bar)
+-        self.assertEqual(bar.log, [("rd", FUSECTRL), ("rd", DSOV)])
+-        self.assertEqual(v.dsov, 0xBADF1701)
+-        self.assertEqual((v.priv_mask, v.crc_status, v.fpf_row), (0, 0, UNREADABLE))
+-        self.assertEqual(v.shadow, {"DSOV_POISONED": 0xBADF1701})
++        self.assertEqual(bar.log, [("rd", FUSECTRL)])
++        self.assertEqual(v.shadow, {"FUSECTRL_POISONED": 0xBAD00001})
+         self.assertFalse(v.passed)
+ 
+     def test_other_bad_dsov_values_are_not_goldilocks(self):
+-        for dsov in (2, 0xFFFFFFFF, 0xBAD00100):
++        for dsov in (2, 0xFFFFFFFF):
+             with self.subTest(dsov=hex(dsov)):
+                 v = classify(FakeBar(DSOV=dsov))
+                 self.assertFalse(v.passed)
+-- 
+2.56.0
+

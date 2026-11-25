@@ -181,9 +181,9 @@ def parse_list(text, cast=int):
 # ---------------------------------------------------------------- plans
 
 def base_env(a):
-    env = {"REPEAT": 2, "FLOOR": a.floor, "LOST_NOPARK": 1, "PARK_EACH": 0, "GFW_WAIT": a.gfw_wait,
+    env = {"REPEAT": 2, "FLOOR": a.floor, "LOST_NOPARK": 1, "FAIL_STOP": 1, "PARK_EACH": 0, "GFW_WAIT": a.gfw_wait,
            "SHOOT_THROUGH_STALLS": 1 if a.shoot_through else 0, "STALLRUN": a.stallrun,
-           "PARTIAL_CONTINUE": 1 if a.continue_partials else 0, "BAD0_FOLLOWUP": 1, "LOSTRUN": a.lostrun,
+           "PARTIAL_CONTINUE": 1 if a.continue_partials else 0, "BAD0_FOLLOWUP": 0, "LOSTRUN": a.lostrun,
            "SHOTCAP": 450}
     if getattr(a, "continue_sent0", False):
         env["SENT0_CONTINUE"] = 1
@@ -1229,7 +1229,8 @@ def classify_boot(out, rc):
 
 # bootrun forwards these to the runner (RUNNER picks the file it copies and runs as root on the bench); they relax a
 # stop or change what runs, so only the plan may set them
-PLAN_ONLY_ENV = ("SHOOT_THROUGH_STALLS", "PARTIAL_CONTINUE", "SENT0_CONTINUE", "POISON_RESET", "CLASSIFY_WRITE", "RUNNER")
+PLAN_ONLY_ENV = ("SHOOT_THROUGH_STALLS", "PARTIAL_CONTINUE", "SENT0_CONTINUE", "POISON_RESET", "CLASSIFY_WRITE",
+                 "BAD0_FOLLOWUP", "FAIL_STOP", "RUNNER")
 
 
 def cmd_run(a):
@@ -1270,6 +1271,12 @@ def cmd_run(a):
         print("DRY RUN: nothing was run. Add --execute to power-cycle the bench and shoot, one boot per line above "
               "(a tip moves the rest to new boots).")
         return 0
+    if os.path.isdir(logdir):
+        existing = [fn for fn in os.listdir(logdir) if re.match(r"^boot-\d+\.(log|out)$", fn)]
+        if existing:
+            print("RUN: log dir %s already contains boot logs (%s); use a fresh --log-dir to avoid overwriting them"
+                  % (logdir, ", ".join(sorted(existing)[:3])))
+            return 2
     os.makedirs(logdir, exist_ok=True)
     runlog = open(os.path.join(logdir, "run.log"), "a")
 
@@ -1312,6 +1319,9 @@ def cmd_run(a):
                 if what == "poison" and a.on_poison == "stop":   # the default stop holds for the warm-up step too
                     stop = "poison in the warm-up step (%s): the boot ended; tally the logs before going on" % text
                     break
+                if what in ("lost", "stall") and a.on_tip == "stop":
+                    stop = "%s in the warm-up step (%s): stopped (default --on-tip stop); review logs before going on" % (what, text)
+                    break
                 conts += 1
                 print("RUN: tipped in the warm-up step (%s); the same steps go to a new boot" % what)
                 if conts > a.max_cont:
@@ -1321,6 +1331,9 @@ def cmd_run(a):
             j = pos + (idx - off)
             if what == "poison" and a.on_poison == "stop":
                 stop = "poison at plan step %d (%s): the boot ended; tally the logs before going on" % (j, text)
+                break
+            if what in ("lost", "stall") and a.on_tip == "stop":
+                stop = "%s at plan step %d (%s): stopped (default --on-tip stop); review logs before going on" % (what, j, text)
                 break
             if what == "poison" and plan.get("on_poison") == "next_column":
                 ci = flat[j][0]
@@ -1467,6 +1480,8 @@ def main(argv=None):
     sp.add_argument("--max-cont", type=int, default=3, help="tips in a warm-up step before giving up (default 3)")
     sp.add_argument("--on-poison", choices=("stop", "continue"), default="stop",
                     help="stop (default) or go on in a fresh boot as the plan says (each poison costs a power cycle)")
+    sp.add_argument("--on-tip", choices=("stop", "continue"), default="stop",
+                    help="on lost/stall tip: stop (default, wait for log review) or continue in a fresh boot")
     sp.add_argument("--owner-ok-shoot-through", action="store_true", help="required to run a plan with SHOOT_THROUGH_STALLS=1")
     sp.add_argument("--pw-min", type=int, default=W)
     sp.set_defaults(func=cmd_run)

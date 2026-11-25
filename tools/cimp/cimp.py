@@ -485,7 +485,7 @@ def run_checks(profile, eff, cards):
         env["SSHPASS"] = pw
     batch = [] if eff["ssh_auth"] == "password" else ["-o", "BatchMode=yes"]   # BatchMode turns password auth off
     probe = ("echo up; test -e %s && echo pico || echo nopico; test -x %s && echo py || echo nopy; "
-             "test -d %s && echo dir || echo nodir; lsmod | grep -q '^nvidia ' && echo nvidia || echo nonvidia"
+             "test -d %s && echo dir || echo nodir; lsmod | grep -qE '^(nvidia|nouveau) ' && echo nvidia || echo nonvidia"
              % (shell_q(eff["pico_port"]), shell_q(eff["bench_py"]), shell_q(eff["bench_dir"])))
     try:
         p = subprocess.run(["ssh"] + batch + ["cimp-bench", probe], env=env, capture_output=True, text=True, timeout=40)
@@ -907,8 +907,14 @@ class Watch:
             hr = next((R_HRUN.match(x) for x in log if R_HRUN.match(x)), None)
             hb = [h for h in (R_HBOOT.match(x) for x in log) if h]
             done = any(R_HEND.match(x) for x in log)
-            raws = sorted(glob.glob(os.path.join(p, "boot-[0-9][0-9].log")))
-            boot_no = int(hb[-1].group(1)) if hb else (int(raws[-1][-6:-4]) if raws else 1)
+            raws = sorted(
+                (os.path.join(p, fn) for fn in os.listdir(p) if re.match(r"^boot-\d+\.log$", fn))
+                if os.path.isdir(p) else (),
+                key=lambda fn: int(re.search(r"boot-(\d+)\.log$", fn).group(1)),
+            )
+            boot_no = int(hb[-1].group(1)) if hb else (
+                int(re.search(r"boot-(\d+)\.log$", raws[-1]).group(1)) if raws else 1
+            )
             S["label"] = ("%s: %s (card %s)" % (hr.group(1), hr.group(2), hr.group(4))) if hr else ""
             S["total"] = int(hr.group(3)) if hr else None
             cur_path = os.path.join(p, "boot-%02d.log" % boot_no)
@@ -918,7 +924,8 @@ class Watch:
         boots = []
         for f in raws:
             b = parse_boot(lines_of(f))
-            b["n"], b["path"] = int(f[-6:-4]), f
+            m_bn = re.search(r"(?:boot-|-b)(\d+)\.(?:log|raw)$", f)
+            b["n"], b["path"] = (int(m_bn.group(1)) if m_bn else int(f[-6:-4])), f
             boots.append(b)
         S["boots"] = boots
         cur = next((b for b in boots if b["path"] == cur_path), None)
@@ -1190,7 +1197,7 @@ def cmd_hunt(a, rest):
     sys.path.insert(0, os.path.join(TOOLS, "hunter"))
     import goldilocks_hunt as gh  # noqa: E402
     args = list(rest)
-    if args and args[0] == "run":
+    if args and args[0] == "run" and not any(x in ("-h", "--help") for x in args):
         eff, src, cards = resolve(a.profile)
         probs = check_required(eff, cards)
         if probs and "--execute" in args:

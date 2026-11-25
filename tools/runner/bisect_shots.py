@@ -262,6 +262,7 @@ SHOTCAP = int(os.environ.get("SHOTCAP", "450")); LOSTRUN = int(os.environ.get("L
 SEQX = [(i, s_) for i, s_ in enumerate(SEQ) for _ in range(s_[6] if len(s_) > 6 else REPEAT)]; CONT = CONT or any(len(s_) > 6 and s_[6] > 1 for s_ in SEQ); cells = {}; nshots = [0]; lostrun = [0]; ended = [""]
 SENT = int(os.environ.get("SENTINEL", "0x820410"), 16); CELLLOST = int(os.environ.get("CELLLOST", "0")); skip = [-1]; clost = [0]
 LOST_NOPARK = os.environ.get("LOST_NOPARK") == "1"
+FAIL_STOP = os.environ.get("FAIL_STOP") == "1"
 PARTIAL_CONTINUE = os.environ.get("PARTIAL_CONTINUE") == "1"
 SENT0_CONTINUE = os.environ.get("SENT0_CONTINUE") == "1"
 STALL_THROUGH = os.environ.get("SHOOT_THROUGH_STALLS") == "1"
@@ -405,7 +406,7 @@ if True:
             shot("unknown", {}, "controller unreadable"); print("STOP: power cycle needed"); tr_dump(); sys.exit(9)
         if (sw & 0x40) or vo < 500:
             print("step %d v=%d td=%d pw=%d vr=%d f=%d: CONTROLLER OFF (0x%04x, %d mV)" % (i, v, td, pw, vr, fs, sw, vo))
-            shot("latch", {}, "CONTROLLER OFF (0x%04x, %d mV)" % (sw, vo)); print("STOP: power cycle needed"); sys.exit(9)
+            shot("latch", {}, "CONTROLLER OFF (0x%04x, %d mV)" % (sw, vo)); print("STOP: power cycle needed"); tr_dump(); sys.exit(9)
         out = "lost"; regs = {}; stalled = False; last_stall[0] = False
         t_rs = time.monotonic(); ok_rs = restore(BDF, wait_s=RESTORE_WAIT); t_rs = time.monotonic() - t_rs
         if ok_rs and t_rs > 0.4: print("   link back after %.2f s (slow retrain)" % t_rs, flush=True)
@@ -476,11 +477,16 @@ if True:
             tr_dump()
             if "observed GOLDILOCKS" in out: print("   no park: the state stays for review, no burn"); sys.exit(14)
             if stalled: print("   no park: GFW is still booting"); sys.exit(14)
+            if FAIL_STOP: print("   no park: FAIL_STOP=1 (review logs and power cycle)"); sys.exit(14)
             rc_, pl_ = park(card); print("   park: rc %d %s" % (rc_, pl_), flush=True); sys.exit(14)
         if CONT:
             c_ = cells.setdefault(i, {"under": 0, "lost": 0, "partial": 0, "other": 0})
             ck = kind if kind in ("under", "lost", "partial") else "compass" if kind == "compass" else "stall" if (kind == "stall" and STALL_THROUGH) else "other"
             c_[ck] = c_.get(ck, 0) + 1; lostrun[0] = lostrun[0] + 1 if ck == "lost" else 0
+            if ck == "lost" and FAIL_STOP:
+                print("step %d shot %d v=%d td=%d pw=%d vr=%d f=%d: %s" % (i, k, v, td, pw, vr, fs, out), flush=True)
+                print("TIPPED at step %d shot %d (v=%d td=%d pw=%d vr=%d f=%d): lost (FAIL_STOP=1: no park, no auto-reset). Power cycle (%d shots this boot)" % (i, k, v, td, pw, vr, fs, nshots[0]))
+                tr_dump(); sys.exit(10)
             if ck == "lost" and not LOST_NOPARK:
                 prc, pl = park(card)
                 if prc != 0:
@@ -544,16 +550,20 @@ if True:
             tr_dump()
             if ck == "lost": sys.exit(10)   # parked right after the shot, or recovered by the reset pulse: power cycle next
             if stalled: print("   no park: GFW is still booting"); sys.exit(10)
+            if FAIL_STOP: print("   no park: FAIL_STOP=1 (review logs and power cycle)"); sys.exit(10)
             rc_, pl_ = park(card); print("   park: rc %d %s" % (rc_, pl_), flush=True); sys.exit(10)
         print("step %d v=%d td=%d pw=%d vr=%d f=%d: %s" % (i, v, td, pw, vr, fs, out), flush=True)
         if out != "under":
             print("TIPPED at step %d (v=%d td=%d pw=%d vr=%d f=%d): %s. Rest of this boot is unreliable (sticky poison): power cycle, next boot starts just before this step" % (i, v, td, pw, vr, fs, out))
             tr_dump()
             if stalled: print("   no park: GFW is still booting"); sys.exit(10)
+            if FAIL_STOP: print("   no park: FAIL_STOP=1 (review logs and power cycle)"); sys.exit(10)
             rc_, pl_ = park(card); print("   park: rc %d %s" % (rc_, pl_), flush=True); sys.exit(10)
 tr_dump()
 if last_stall[0]:
     print("   no park: GFW is still booting after the last shot (power cycle)", flush=True)
+elif FAIL_STOP:
+    print("   no park: FAIL_STOP=1 (end of boot; power cycle before next run)", flush=True)
 else:
     rc_, pl_ = park(card); print("   park: rc %d %s" % (rc_, pl_), flush=True)
     if rc_ != 0:

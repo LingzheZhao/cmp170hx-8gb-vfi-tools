@@ -443,6 +443,7 @@ class RunDriverTest(unittest.TestCase):
         for f in ("count", "calls"):
             if os.path.exists(os.path.join(self.tmp, f)):
                 os.remove(os.path.join(self.tmp, f))
+        shutil.rmtree(os.path.join(self.tmp, "logs"), ignore_errors=True)
 
     def plan(self, *args):
         path = os.path.join(self.tmp, "plan.json")
@@ -546,15 +547,26 @@ class RunDriverTest(unittest.TestCase):
         self.assertEqual([st[0] for st in second], [425] * 11)  # straight to the next depth
         self.assertEqual(second[0][6], 4)                       # a new boot: its first step gets the extra shot
 
-    def test_lost_and_stall_tips_continue_with_the_next_step(self):
+    def test_lost_and_stall_tips_stop_by_default_and_continue_when_asked(self):
         plan = self.plan("slow", "--v", "375")
+        p_obj = json.load(open(plan))
+        self.assertEqual(p_obj["env"]["BAD0_FOLLOWUP"], 0)
+        self.assertEqual(p_obj["env"]["FAIL_STOP"], 1)
         for text in ("TIPPED at step 2 shot 5 (v=375): lost and not recovered by a plain reset (link down). Power cycle",
                      "TIPPED at step 2 shot 5 (v=375): booting GFW=0x00000000 (GFW stall). Power cycle (6 shots this boot)"):
             with self.subTest(text=text[:40]):
                 self.reset_fake()
                 rc, out, calls = self.drive(plan, [(text, 10), DONE], "--execute")
-                self.assertEqual(rc, 0, out)
-                self.assertEqual(len(json.loads(calls[1][1])), 11 - 3)
+                self.assertEqual(rc, 3, out)
+                self.assertEqual(len(calls), 1)
+                # Reusing the same non-empty log dir must be refused instead of overwriting boot-01.log
+                rc_dup, out_dup, _ = self.drive(plan, [DONE], "--execute")
+                self.assertEqual(rc_dup, 2, out_dup)
+                self.assertIn("already contains boot logs", out_dup)
+                self.reset_fake()
+                rc2, out2, calls2 = self.drive(plan, [(text, 10), DONE], "--execute", "--on-tip", "continue")
+                self.assertEqual(rc2, 0, out2)
+                self.assertEqual(len(json.loads(calls2[1][1])), 11 - 3)
 
     def test_holds_latch_and_unknown_outcomes_stop(self):
         plan = self.plan("slow", "--v", "375")
@@ -598,9 +610,10 @@ class RunDriverTest(unittest.TestCase):
         self.assertEqual((rc, calls), (3, []), out)
         os.remove(os.path.join(self.tmp, "logs", "STOP"))
         tip = ("TIPPED at step 0 shot 1 (v=375): lost and not recovered by a plain reset (link down). Power cycle", 10)
-        rc, out, calls = self.drive(plan, [tip] * 5, "--execute", "--max-boots", "2")
+        rc, out, calls = self.drive(plan, [tip] * 5, "--execute", "--on-tip", "continue", "--max-boots", "2")
         self.assertEqual(rc, 3, out)
         self.assertIn("--max-boots 2 reached", out)
+        self.reset_fake()
         with open(plan) as f:
             p = json.load(f)
         p["columns"][0]["steps"][0][1] = 97                     # s1 -20: a write across the release
